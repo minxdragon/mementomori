@@ -5,6 +5,9 @@ from urllib.request import urlopen, Request
 import numpy as np
 import re
 import time
+#import cairosvg
+import xml.etree.ElementTree as ET
+import subprocess
 
 # Open the camera
 cap = cv2.VideoCapture(0)
@@ -114,6 +117,17 @@ while True:
             # Load and display the generated image using OpenCV
             generated_image = cv2.imread(filename)
             cv2.imshow("Generated Image", generated_image)
+
+            # Convert the OpenCV image to SVG using autotrace
+            svg_filename = f'dream_{idx}.svg'
+            result = subprocess.run(['autotrace', '-output-file', svg_filename, filename])
+            if result.returncode == 0:
+                print(f"Conversion to SVG successful. SVG file saved as {svg_filename}")
+            else:
+                print("Conversion to SVG failed.")
+
+
+
             cv2.waitKey(0)  # Wait for a key press before closing the window
 
         # Close all OpenCV windows
