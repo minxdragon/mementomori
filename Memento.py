@@ -95,7 +95,7 @@ while True:
         model_name = "stability-ai/sdxl:8beff3369e81422112d93b89ca01426147de542cd4684c244b673b105188fe5f"
         output = replicate.run(
             model_name,
-            input={"prompt": prompt+" coloring page, line art, plotter art, cross hatching", "image": open(init_image, "rb")}
+            input={"prompt": prompt+", coloring page, line art, plotter art", "image": open(init_image, "rb")}
         )
 
         # Assuming 'output' is a list containing the URL(s)
