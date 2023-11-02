@@ -105,6 +105,7 @@ while True:
         for idx, url in enumerate(output):
             # Generate a filename based on the index
             filename = f'dream_{idx}.jpg'
+            print(f"Downloading {url} to {filename}...")
             
             # Download the image from the URL and save it with the generated filename
             request_site = Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -120,6 +121,7 @@ while True:
 
             # Convert the OpenCV image to SVG using autotrace
             svg_filename = f'dream_{idx}.svg'
+            print(f"Converting {filename} to SVG...")
             result = subprocess.run(['autotrace', '-output-file', svg_filename, filename])
             if result.returncode == 0:
                 print(f"Conversion to SVG successful. SVG file saved as {svg_filename}")
