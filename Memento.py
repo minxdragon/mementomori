@@ -7,7 +7,8 @@ import re
 import time
 #import cairosvg
 import xml.etree.ElementTree as ET
-import subprocess
+from PIL import Image 
+import potrace
 
 # Open the camera
 cap = cv2.VideoCapture(0)
@@ -120,11 +121,13 @@ while True:
             generated_image = cv2.imread(filename)
             cv2.imshow("Generated Image", generated_image)
             print("Generated image saved as " + filename)
-            # Convert the OpenCV image to SVG using autotrace
+            
+            # Convert the OpenCV image to SVG using Potrace
             print("Converting to SVG...")
-            svg_filename = f'dream_{idx}.svg'
-            # Run autotrace without the -output-file argument
-            subprocess.run(['autotrace', filename,])
+            bmp_image = np.array(Image.open(filename))  # Convert to NumPy array
+            trace = potrace.Bitmap(bmp_image)
+            path = trace.trace()
+            path.save(f'dream_{idx}.svg')
 
             cv2.waitKey(0)  # Wait for a key press before closing the window
 
