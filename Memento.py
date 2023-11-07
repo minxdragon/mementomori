@@ -77,7 +77,7 @@ while True:
 
             # Define a list of words to replace
             # create a dictionary of colors to replace
-            words_to_replace = ["color", "colorful", "rainbow", "purple", "green", "blue", "brown", "red", "yellow", "orange", "pink", "beige", "turquoise", "teal", "navy", "maroon", "fuchsia", "gold", "silver", "bronze", "copper", "rainbow", "multicolor", "multicolored", "multicolour",]
+            words_to_replace = ["photographic", "photograph", "television", "video", "painting", "photo", "brown", "red", "yellow", "orange", "pink", "beige", "turquoise", "teal", "navy", "maroon", "fuchsia", "gold", "silver", "bronze", "copper", "rainbow", "multicolor", "multicolored", "multicolour",]
 
             # Remove specified words using regular expressions
             cleaned_prompt = output
@@ -93,13 +93,15 @@ while True:
 
         # Run the clip_interrogator function
         prompt = clip_interrogator(init_image)
+        negative_prompt = "photograph, photorealistic, detailed"
 
         # Generate the image using the prompt and initial image
         model_name = "stability-ai/sdxl:8beff3369e81422112d93b89ca01426147de542cd4684c244b673b105188fe5f"
         output = replicate.run(
             model_name,
-            input={"prompt": prompt+", coloring page, line art, plotter art", "image": open(init_image, "rb")}
+            input={"prompt": prompt+", coloring page, outline, line art, plotter art", "Negative Prompt": negative_prompt, "image": open(init_image, "rb"), "prompt_strength":0.6}
         )
+        print("Generating image from " + init_image + " with prompt '" + prompt + "'")
 
         # Assuming 'output' is a list containing the URL(s)
         for idx, url in enumerate(output):
@@ -123,9 +125,6 @@ while True:
             svg_filename = f'dream_{idx}.svg'
             # Run autotrace without the -output-file argument
             subprocess.run(['autotrace', filename,])
-
-            cv2.waitKey(0)  # Wait for a key press before closing the window
-
 
             cv2.waitKey(0)  # Wait for a key press before closing the window
 
