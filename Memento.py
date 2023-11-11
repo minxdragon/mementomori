@@ -93,7 +93,7 @@ while True:
             return cleaned_prompt.strip()
 
         # Run the clip_interrogator function
-        prompt = clip_interrogator(init_image)
+        prompt = clip_interrogator(init_image) + ", coloring page, outline, line art, plotter art"
         negative_prompt = "photograph, photorealistic, detailed"
 
         # Generate the image using the prompt and initial image
