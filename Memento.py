@@ -118,16 +118,54 @@ while True:
             cv2.imwrite(filename, img)
             
             # Load and display the generated image using OpenCV
+            # Load and display the generated image using OpenCV
             generated_image = cv2.imread(filename)
             cv2.imshow("Generated Image", generated_image)
             print("Generated image saved as " + filename)
-            
-            # Convert the OpenCV image to SVG using Potrace
-            print("Converting to SVG...")
-            bmp_image = np.array(Image.open(filename))  # Convert to NumPy array
-            trace = potrace.Bitmap(bmp_image)
+
+            # Convert the OpenCV image to SVG using Potrace with edge detection
+            print("Converting to SVG with edge detection...")
+            gray_image = cv2.cvtColor(generated_image, cv2.COLOR_BGR2GRAY)
+
+            # Resize the image to a smaller size
+            resized_image = cv2.resize(gray_image, (480, 240))  # Specify the desired width and height
+
+            # Apply Canny edge detection
+            edges = cv2.Canny(gray_image, 50, 150)
+
+            # Reduce the scale of the edges
+            edges = (edges / 255).astype(np.uint8)
+
+            # Pass the scaled edges to Potrace
+            trace = potrace.Bitmap(edges)
+
+
+
             path = trace.trace()
-            path.save(f'dream_{idx}.svg')
+
+            # Save the path to an SVG file
+            with open(f'dream_{idx}.svg', 'w') as svg_file:
+                svg_file.write('<svg xmlns="http://www.w3.org/2000/svg" width="480" height="240">\n')
+                
+                for curve in path:
+                    svg_file.write('<path d="')
+                    for segment in curve:
+                        if segment.is_corner:
+                            svg_file.write(f'M {segment.start_point[0]} {segment.start_point[1]} ')
+                            svg_file.write(f'L {segment.end_point[0]} {segment.end_point[1]} ')
+                        else:
+                            svg_file.write(f'C {segment.c1[0]} {segment.c1[1]} {segment.c2[0]} {segment.c2[1]} {segment.end_point[0]} {segment.end_point[1]} ')
+                    
+                    svg_file.write('" />\n')
+                
+                svg_file.write('</svg>')
+
+
+
+
+            cv2.waitKey(0)  # Wait for a key press before closing the window
+
+
 
             cv2.waitKey(0)  # Wait for a key press before closing the window
 
