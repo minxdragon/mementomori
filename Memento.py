@@ -93,14 +93,14 @@ while True:
             return cleaned_prompt.strip()
 
         # Run the clip_interrogator function
-        prompt = clip_interrogator(init_image) + ", coloring page, outline, line art, plotter art"
+        prompt = "an etching of " + clip_interrogator(init_image) + ", coloring page, outline, line art, plotter art"
         negative_prompt = "photograph, photorealistic, detailed"
 
         # Generate the image using the prompt and initial image
         model_name = "stability-ai/sdxl:8beff3369e81422112d93b89ca01426147de542cd4684c244b673b105188fe5f"
         output = replicate.run(
             model_name,
-            input={"prompt": prompt+", coloring page, outline, line art, plotter art", "Negative Prompt": negative_prompt, "image": open(init_image, "rb"), "prompt_strength":0.6}
+            input={"prompt": "an etching of "+prompt+", coloring page, outline, line art, plotter art", "Negative Prompt": negative_prompt, "image": open(init_image, "rb"), "prompt_strength":0.6}
         )
         print("Generating image from " + init_image + " with prompt '" + prompt + "'")
 
@@ -125,19 +125,24 @@ while True:
 
             # Convert the OpenCV image to SVG using Potrace with edge detection
             print("Converting to SVG with edge detection...")
-            gray_image = cv2.cvtColor(generated_image, cv2.COLOR_BGR2GRAY)
 
-            # Resize the image to a smaller size
-            resized_image = cv2.resize(gray_image, (480, 240))  # Specify the desired width and height
+            # Resize the image to a smaller resolution
+            resized_image = cv2.resize(generated_image, (240, 120))
 
             # Apply Canny edge detection
-            edges = cv2.Canny(gray_image, 50, 150)
+            edges = cv2.Canny(resized_image, 50, 150)
 
-            # Reduce the scale of the edges
-            edges = (edges / 255).astype(np.uint8)
+            # Display the edge-detected image
+            cv2.imshow("Edge-Detected Image", edges)
+            cv2.waitKey(0)  # Wait for a key press before closing the window
 
-            # Pass the scaled edges to Potrace
+            # Pass the edge-detected image to Potrace
             trace = potrace.Bitmap(edges)
+            path = trace.trace()
+            path.save(f'dream_{idx}.svg')
+
+            # Close the OpenCV window for the edge-detected image
+            cv2.destroyAllWindows()
 
 
 
@@ -151,7 +156,7 @@ while True:
                     svg_file.write('<path d="')
                     for segment in curve:
                         if segment.is_corner:
-                            svg_file.write(f'M {segment.start_point[0]} {segment.start_point[1]} ')
+                            svg_file.write(f'M {segment.c[0]} {segment.c[1]} ')
                             svg_file.write(f'L {segment.end_point[0]} {segment.end_point[1]} ')
                         else:
                             svg_file.write(f'C {segment.c1[0]} {segment.c1[1]} {segment.c2[0]} {segment.c2[1]} {segment.end_point[0]} {segment.end_point[1]} ')
@@ -159,6 +164,7 @@ while True:
                     svg_file.write('" />\n')
                 
                 svg_file.write('</svg>')
+
 
 
 
