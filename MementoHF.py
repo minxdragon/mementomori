@@ -9,6 +9,7 @@ import time
 import xml.etree.ElementTree as ET
 from PIL import Image 
 import potrace
+import requests
 
 # Open the camera
 cap = cv2.VideoCapture(0)
@@ -97,94 +98,97 @@ while True:
         negative_prompt = "photograph, photorealistic, detailed"
 
         # Generate the image using the prompt and initial image
-        model_name = "stability-ai/sdxl:8beff3369e81422112d93b89ca01426147de542cd4684c244b673b105188fe5f"
-        output = replicate.run(
-            model_name,
-            input={"prompt": "an etching of "+prompt+", coloring page, outline, line art, plotter art", "Negative Prompt": negative_prompt, "image": open(init_image, "rb"), "prompt_strength":0.6}
-        )
-        print("Generating image from " + init_image + " with prompt '" + prompt + "'")
 
-        # Assuming 'output' is a list containing the URL(s)
-        for idx, url in enumerate(output):
-            # Generate a filename based on the index
-            filename = f'dream_{idx}.jpg'
+
+        API_URL = "https://api-inference.huggingface.co/models/stablediffusionapi/vector-art"
+        headers = {"Authorization": f"Bearer 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"}
+
+        def query(payload):
+            response = requests.post(API_URL, headers=headers, json=payload)
+            return response.content
+        image_bytes = query({
+            "inputs": prompt,
+        })
+        # You can access the image with PIL.Image for example
+        import io
+        from PIL import Image
+        image = Image.open(io.BytesIO(image_bytes))
+
+        # # Assuming 'output' is a list containing the URL(s)
+        # for idx, url in enumerate(output):
+        #     # Generate a filename based on the index
+        #     filename = f'dream_{idx}.jpg'
             
-            # Download the image from the URL and save it with the generated filename
-            request_site = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            req = urlopen(request_site)
-            arr = np.asarray(bytearray(req.read()), dtype=np.uint8)
-            img = cv2.imdecode(arr, -1)  # Load it as it is
-            img = np.array(img)
-            cv2.imwrite(filename, img)
+        #     # Download the image from the URL and save it with the generated filename
+        #     request_site = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        #     req = urlopen(request_site)
+        #     arr = np.asarray(bytearray(req.read()), dtype=np.uint8)
+        #     img = cv2.imdecode(arr, -1)  # Load it as it is
+        #     img = np.array(img)
+        #     cv2.imwrite(filename, img)
             
-            # Load and display the generated image using OpenCV
-            # Load and display the generated image using OpenCV
-            generated_image = cv2.imread(filename)
-            cv2.imshow("Generated Image", generated_image)
-            print("Generated image saved as " + filename)
+        #     # Load and display the generated image using OpenCV
+        #     # Load and display the generated image using OpenCV
+        #     generated_image = cv2.imread(filename)
+        #     cv2.imshow("Generated Image", generated_image)
+        #     print("Generated image saved as " + filename)
 
-            # Convert the OpenCV image to SVG using Potrace with edge detection
-            print("Converting to SVG with edge detection...")
+        #     # Convert the OpenCV image to SVG using Potrace with edge detection
+        #     print("Converting to SVG with edge detection...")
 
-            # Resize the image to a smaller resolution before converting to grayscale
-            resized_image = cv2.resize(generated_image, (240, 120))
+        #     # Resize the image to a smaller resolution before converting to grayscale
+        #     resized_image = cv2.resize(generated_image, (240, 120))
 
-            # Convert the resized image to grayscale
-            gray_resized_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2GRAY)
+        #     # Convert the resized image to grayscale
+        #     gray_resized_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2GRAY)
 
-            # Apply Canny edge detection to the grayscale image
-            edges = cv2.Canny(gray_resized_image, 25, 100)
+        #     # Apply Canny edge detection to the grayscale image
+        #     edges = cv2.Canny(gray_resized_image, 25, 100)
 
-            # Display the edge-detected image
-            cv2.imshow("Edge-Detected Image", edges)
-            cv2.waitKey(0)  # Wait for a key press before closing the window
+        #     # Display the edge-detected image
+        #     cv2.imshow("Edge-Detected Image", edges)
+        #     cv2.waitKey(0)  # Wait for a key press before closing the window
 
-            # Pass the edge-detected image to Potrace with path simplification
-            trace = potrace.Bitmap(edges)
-            trace.turds = True  # Enable turd removal
-            trace.alphamax = 0.1  # Adjust the alpha-max parameter
-            path = trace.trace()
+        #     # Pass the edge-detected image to Potrace with path simplification
+        #     trace = potrace.Bitmap(edges)
+        #     trace.turds = True  # Enable turd removal
+        #     trace.alphamax = 0.1  # Adjust the alpha-max parameter
+        #     path = trace.trace()
 
-            # Get the SVG string representation of the path
-            svg_string = path.to_svg()
+        #     # Get the SVG string representation of the path
+        #     svg_string = path.to_svg()
 
-            # Save the SVG string to an SVG file
-            with open(f'dream_{idx}.svg', 'w') as svg_file:
-                svg_file.write(svg_string)
+        #     # Save the SVG string to an SVG file
+        #     with open(f'dream_{idx}.svg', 'w') as svg_file:
+        #         svg_file.write(svg_string)
 
-            # Close the OpenCV window for the edge-detected image
-            cv2.destroyAllWindows()
+        #     # Close the OpenCV window for the edge-detected image
+        #     cv2.destroyAllWindows()
 
 
 
-            path = trace.trace()
+        #     path = trace.trace()
 
-            # Save the path to an SVG file
-            with open(f'dream_{idx}.svg', 'w') as svg_file:
-                svg_file.write('<svg xmlns="http://www.w3.org/2000/svg" width="480" height="240">\n')
+        #     # Save the path to an SVG file
+        #     with open(f'dream_{idx}.svg', 'w') as svg_file:
+        #         svg_file.write('<svg xmlns="http://www.w3.org/2000/svg" width="480" height="240">\n')
                 
-                for curve in path:
-                    svg_file.write('<path d="')
-                    for segment in curve:
-                        if segment.is_corner:
-                            svg_file.write(f'M {segment.c[0]} {segment.c[1]} ')
-                            svg_file.write(f'L {segment.end_point[0]} {segment.end_point[1]} ')
-                        else:
-                            svg_file.write(f'C {segment.c1[0]} {segment.c1[1]} {segment.c2[0]} {segment.c2[1]} {segment.end_point[0]} {segment.end_point[1]} ')
+        #         for curve in path:
+        #             svg_file.write('<path d="')
+        #             for segment in curve:
+        #                 if segment.is_corner:
+        #                     svg_file.write(f'M {segment.c[0]} {segment.c[1]} ')
+        #                     svg_file.write(f'L {segment.end_point[0]} {segment.end_point[1]} ')
+        #                 else:
+        #                     svg_file.write(f'C {segment.c1[0]} {segment.c1[1]} {segment.c2[0]} {segment.c2[1]} {segment.end_point[0]} {segment.end_point[1]} ')
                     
-                    svg_file.write('" />\n')
+        #             svg_file.write('" />\n')
                 
-                svg_file.write('</svg>')
+        #         svg_file.write('</svg>')
 
 
 
-
-
-            cv2.waitKey(0)  # Wait for a key press before closing the window
-
-
-
-            cv2.waitKey(0)  # Wait for a key press before closing the window
+        cv2.waitKey(0)  # Wait for a key press before closing the window
 
         # Close all OpenCV windows
         cv2.destroyAllWindows()
