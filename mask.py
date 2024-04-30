@@ -10,7 +10,7 @@ from people_segmentation.pre_trained_models import create_model
 from svglib.svglib import svg2rlg
 from reportlab.graphics import renderPDF, renderPM
 import init
-
+import datetime
 
 print("Loading model...")
 model = create_model("Unet_2020-07-20")
@@ -92,7 +92,17 @@ binary = cv2.resize(binary, new_size)
 
 # Save the resized binary image
 print("Saving resized binary image as 'binary.png'")
-cv2.imwrite('binary.png', binary)
+# Get the current date and time
+now = datetime.datetime.now()
+
+# Format the date and time as a string
+timestamp = now.strftime('%Y%m%d%H%M%S')
+
+# Use the timestamp in the file name
+filename = f'binary_{timestamp}.png'
+
+# Save the binary image
+cv2.imwrite(filename, binary)
 
 # Convert the binary image to SVG
 print("Converting binary image to SVG...")
