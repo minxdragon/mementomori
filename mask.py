@@ -11,6 +11,8 @@ from svglib.svglib import svg2rlg
 from reportlab.graphics import renderPDF, renderPM
 import init
 import datetime
+from shapely.geometry import LineString
+from simplification.cutil import simplify_coords
 
 def main():
 
@@ -34,7 +36,7 @@ def main():
 
     cap.release()
     image = load_rgb("webcam.jpg")
-    imshow(image)
+    #imshow(image)
     print("Predicting mask...")
     transform = albu.Compose([albu.Normalize(p=1)], p=1)
     padded_image, pads = pad(image, factor=32, border=cv2.BORDER_CONSTANT)
@@ -45,7 +47,7 @@ def main():
         mask = (prediction > 0).cpu().numpy().astype(np.uint8)
         mask = unpad(mask, pads)
         print("Mask predicted")
-        imshow(mask)
+        #imshow(mask)
     plt.show()
 
     # Normalize the pixel values to the range [0, 255]
@@ -62,7 +64,7 @@ def main():
     # Save the binary mask as an image
     cv2.imwrite('binary_mask.jpg', binary_mask)
     print("Binary mask saved as 'binary_mask.jpg'")
-    imshow(mask)
+    #imshow(mask)
     plt.show()
 
     # Apply Sobel edge detection
@@ -94,18 +96,20 @@ def main():
 
     # Save the resized binary image
     print("Saving resized binary image as 'binary.png'")
-    # Get the current date and time
-    now = datetime.datetime.now()
+    # # Get the current date and time
+    # now = datetime.datetime.now()
 
-    # Format the date and time as a string
-    timestamp = now.strftime('%Y%m%d%H%M%S')
+    # # Format the date and time as a string
+    # timestamp = now.strftime('%Y%m%d%H%M%S')
 
     # Use the timestamp in the file name
-    filename = f'binary_{timestamp}.png'
+    filename = f'binary.png'
 
     # Save the binary image
     cv2.imwrite(filename, binary)
 
-    # # Convert the binary image to SVG
-    # print("Converting binary image to SVG...")
-    # svg_data = init.main()
+    # Convert the binary image to SVG
+    print("Converting binary image to SVG...")
+    init.main()
+if __name__ == "__main__":
+    main()
