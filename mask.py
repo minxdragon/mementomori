@@ -11,8 +11,8 @@ from svglib.svglib import svg2rlg
 from reportlab.graphics import renderPDF, renderPM
 import init
 import datetime
-from shapely.geometry import LineString
-from simplification.cutil import simplify_coords
+import xml.etree.ElementTree as ET
+from svgoutline import svg_to_outlines
 
 def main():
 
@@ -111,5 +111,12 @@ def main():
     # Convert the binary image to SVG
     print("Converting binary image to SVG...")
     init.main()
+    print("SVG image saved as 'binary.svg'")
+
+    tree = ET.parse("binary.svg")
+    root = tree.getroot()
+    outlines = svg_to_outlines(root)
+    imshow(outlines)
+
 if __name__ == "__main__":
     main()
