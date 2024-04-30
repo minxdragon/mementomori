@@ -104,6 +104,6 @@ filename = f'binary_{timestamp}.png'
 # Save the binary image
 cv2.imwrite(filename, binary)
 
-# Convert the binary image to SVG
-print("Converting binary image to SVG...")
-svg_data = init.main()
+# # Convert the binary image to SVG
+# print("Converting binary image to SVG...")
+# svg_data = init.main()
