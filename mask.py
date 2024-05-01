@@ -10,7 +10,6 @@ from people_segmentation.pre_trained_models import create_model
 from svglib.svglib import svg2rlg
 from reportlab.graphics import renderPDF, renderPM
 import init
-import datetime
 import xml.etree.ElementTree as ET
 from svgoutline import svg_to_outlines
 from PIL import Image
@@ -97,13 +96,6 @@ def main():
 
     # Save the resized binary image
     print("Saving resized binary image as 'binary.png'")
-    # # Get the current date and time
-    # now = datetime.datetime.now()
-
-    # # Format the date and time as a string
-    # timestamp = now.strftime('%Y%m%d%H%M%S')
-
-    # Use the timestamp in the file name
     filename = f'binary.png'
 
     # Save the binary image
@@ -126,11 +118,6 @@ def main():
     print("Converting binary image to SVG...")
     init.main()
     print("SVG image saved as 'binary.svg'")
-
-    tree = ET.parse("binary.svg")
-    root = tree.getroot()
-    outlines = svg_to_outlines(root)
-    imshow(outlines)
 
 if __name__ == "__main__":
     main()
