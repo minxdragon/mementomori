@@ -13,6 +13,7 @@ import init
 import datetime
 import xml.etree.ElementTree as ET
 from svgoutline import svg_to_outlines
+from PIL import Image
 
 def main():
 
@@ -107,6 +108,19 @@ def main():
 
     # Save the binary image
     cv2.imwrite(filename, binary)
+
+    #convert the white pixels to transparent
+    img = Image.open(filename)
+    img = img.convert("RGBA")
+    datas = img.getdata()
+    newData = []
+    for item in datas:
+        if item[0] == 255 and item[1] == 255 and item[2] == 255:
+            newData.append((255, 255, 255, 0))
+        else:
+            newData.append(item)
+    img.putdata(newData)
+    img.save(filename, "PNG")
 
     # Convert the binary image to SVG
     print("Converting binary image to SVG...")
