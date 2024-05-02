@@ -117,7 +117,6 @@ def main():
     # Convert the binary image to SVG
     print("Converting binary image to SVG...")
     init.main()
-    print("SVG image saved as 'binary.svg'")
 
 if __name__ == "__main__":
     main()
