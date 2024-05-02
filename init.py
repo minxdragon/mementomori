@@ -194,15 +194,15 @@ def main():
     return svg_image
     
 
-def maskmain(binary):
-    print("opening image")
-    image = Image.open(binary).convert('RGBA')
-    print("converting image to svg")
-    svg_image = rgba_image_to_svg_contiguous(image)
-    with open("binary.svg", "w") as text_file:
-        text_file.write(svg_image)
-        print("SVG image saved as 'binary.svg'")
-    return svg_image
+# def maskmain(binary):
+#     print("opening image")
+#     image = Image.open(binary).convert('RGBA')
+#     print("converting image to svg")
+#     svg_image = rgba_image_to_svg_contiguous(image)
+#     with open("binary.svg", "w") as text_file:
+#         text_file.write(svg_image)
+#         print("SVG image saved as 'binary.svg'")
+#     return svg_image
     
 
 if __name__ == '__main__':
