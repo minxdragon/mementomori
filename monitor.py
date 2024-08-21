@@ -30,11 +30,24 @@ def update_display():
         base_image.paste(new_layer, (0, 0), new_layer)
         processed_images.add(png_file)
 
-    # Close any previous images
+    # Save the image temporarily to open it in full screen
+    base_image.save("/tmp/fullscreen_image.png")
+
+    # Close any previous instances of Preview
     subprocess.run(["pkill", "Preview"])
 
-    # Display the updated image directly from memory
-    base_image.show()
+    # Open the image with Preview in full-screen mode
+    subprocess.run(["open", "-a", "Preview", "/tmp/fullscreen_image.png"])
+
+    # Add a delay to ensure Preview opens before triggering full screen
+    time.sleep(1)
+
+    # Trigger full-screen mode using AppleScript
+    subprocess.run([
+        "osascript", "-e",
+        'tell application "Preview" to activate',
+        "-e", 'tell application "System Events" to keystroke "f" using {control down, command down}'
+    ])
 
 # Run the display update loop
 while True:
