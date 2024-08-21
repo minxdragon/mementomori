@@ -11,11 +11,11 @@ PYTHON_SCRIPT="mask.py"
 echo "Running Python script to generate SVG..."
 python3 $PYTHON_SCRIPT
 
-# Step 2: Monitor for the creation of the SVG file
-echo "Waiting for SVG file to be created..."
-while [ ! -f "$SVG_DIR/$SVG_FILE" ]; do
-  sleep 1
-done
+# # Step 2: Monitor for the creation of the SVG file
+# echo "Waiting for SVG file to be created..."
+# while [ ! -f "$SVG_DIR/$SVG_FILE" ]; do
+#   sleep 1
+# done
 
 # Paths
 INPUT_PNG="binary.png"
