@@ -11,6 +11,7 @@ from svglib.svglib import svg2rlg
 from reportlab.graphics import renderPDF, renderPM
 import init
 
+<<<<<<< Updated upstream
 
 print("Loading model...")
 model = create_model("Unet_2020-07-20")
@@ -19,6 +20,20 @@ model.eval()
 #save webcam as image
 print("Running webcam...")
 cap = cv2.VideoCapture(0)
+=======
+# def send_gcode_to_plotter(gcode_file):
+#     # Adjust the serial settings for your plotter
+#     ser = serial.Serial('/dev/tty.usbserial-10', 115200)  # Replace with the actual serial port and baud rate
+
+#     with open(gcode_file, 'r') as f:
+#         for line in f:
+#             ser.write(line.encode() + b'\n')
+#             time.sleep(0.1)  # Small delay to ensure commands are processed
+
+#     ser.close()
+    
+def main():
+>>>>>>> Stashed changes
 
 # Capture a single frame
 ret, frame = cap.read()
@@ -94,6 +109,49 @@ binary = cv2.resize(binary, new_size)
 print("Saving resized binary image as 'binary.png'")
 cv2.imwrite('binary.png', binary)
 
+<<<<<<< Updated upstream
 # Convert the binary image to SVG
 print("Converting binary image to SVG...")
 svg_data = init.main()
+=======
+    # Resize the binary image
+    binary = cv2.resize(binary, new_size)
+
+    # Save the resized binary image
+    print("Saving resized binary image as 'binary.png'")
+    filename = f'binary.png'
+
+    # Save the binary image
+    cv2.imwrite(filename, binary)
+
+    #convert the white pixels to transparent
+    img = Image.open(filename)
+    img = img.convert("RGBA")
+    datas = img.getdata()
+    newData = []
+    for item in datas:
+        if item[0] == 255 and item[1] == 255 and item[2] == 255:
+            newData.append((255, 255, 255, 0))
+        else:
+            newData.append(item)
+    img.putdata(newData)
+    img.save(filename, "PNG")
+
+    # Convert the binary image to SVG
+    print("Converting binary image to SVG...")
+    init.main()
+
+    # print("initializing plotter code")
+    # svg_file = "output.svg"  # Replace with the actual SVG file name
+    # gcode_file = "output.gcode"  # Output G-code file name
+
+    # # Convert SVG to G-code using Inkscape's command-line interface
+    # inkscape_command = f"inkscape {svg_file} --export-filename={gcode_file} --export-plain-svg --verb=Extensions.Gcodetools.Plot"
+    # subprocess.run(inkscape_command, shell=True)
+
+    # # Send G-code to the plotter via serial connection
+    # send_gcode_to_plotter(gcode_file)
+
+if __name__ == "__main__":
+    main()
+>>>>>>> Stashed changes
