@@ -43,7 +43,13 @@ def update_display():
     base_image.save("/tmp/fullscreen_image.png")
 
     # Open the image with Preview in full-screen mode
-    subprocess.run(["open", "/tmp/fullscreen_image.png"])
+    subprocess.run(["open", "-a", "Preview", "/tmp/fullscreen_image.png"])
+
+    # Command to make Preview go full-screen (works on macOS with AppleScript)
+    subprocess.run([
+        "osascript", "-e", 
+        'tell application "System Events" to keystroke "f" using {control down, command down}'
+    ])
 
 # Run the display update loop
 while True:

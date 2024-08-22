@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "/Users/j_laptop/Development/mementomori/monitor.py", line 57, in <module>
+    time.sleep(5)  # Adjust the delay as needed
+    ^^^^^^^^^^^^^
+KeyboardInterrupt
+nohup: demo.sh: No such file or directory
