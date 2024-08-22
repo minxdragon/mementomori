@@ -3,14 +3,18 @@ from PIL import Image
 import time
 import subprocess
 
+# Set your screen resolution here
+screen_width = 1920  # Replace with your actual screen width
+screen_height = 1080  # Replace with your actual screen height
+
 # Define the folder containing the PNGs
 png_folder = "./pngs"
 
 # Track processed images
 processed_images = set()
 
-# Create a blank base image (assuming 1920x1080, adjust as needed)
-base_image = Image.new("RGBA", (1920, 1080), (255, 255, 255, 0))
+# Create a blank base image that matches the screen resolution
+base_image = Image.new("RGBA", (screen_width, screen_height), (255, 255, 255, 0))
 
 def update_display():
     global processed_images, base_image
@@ -27,27 +31,19 @@ def update_display():
     # Add each new PNG on top of the base image
     for png_file in new_files:
         new_layer = Image.open(os.path.join(png_folder, png_file))
-        base_image.paste(new_layer, (0, 0), new_layer)
+        
+        # Resize new layer to match screen size
+        new_layer = new_layer.resize((screen_width, screen_height), Image.Resampling.LANCZOS)
+        
+        # Paste the new layer on the base image
+        base_image.paste(new_layer, (0, 0), new_layer if new_layer.mode == 'RGBA' else None)
         processed_images.add(png_file)
 
     # Save the image temporarily to open it in full screen
     base_image.save("/tmp/fullscreen_image.png")
 
-    # Close any previous instances of Preview
-    subprocess.run(["pkill", "Preview"])
-
     # Open the image with Preview in full-screen mode
-    subprocess.run(["open", "-a", "Preview", "/tmp/fullscreen_image.png"])
-
-    # Add a delay to ensure Preview opens before triggering full screen
-    time.sleep(1)
-
-    # Trigger full-screen mode using AppleScript
-    subprocess.run([
-        "osascript", "-e",
-        'tell application "Preview" to activate',
-        "-e", 'tell application "System Events" to keystroke "f" using {control down, command down}'
-    ])
+    subprocess.run(["open", "/tmp/fullscreen_image.png"])
 
 # Run the display update loop
 while True:
