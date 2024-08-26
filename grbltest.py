@@ -1,7 +1,7 @@
 import serial
 import time
 
-# Open grbl serial port
+# Open GRBL serial port
 serial_port = '/dev/tty.usbserial-10'
 baud_rate = 115200
 
@@ -11,27 +11,48 @@ except Exception as e:
     print(f"Failed to open serial port {serial_port}: {e}")
     exit(1)
 
-# Open g-code file
-gcode_file = 'output.gcode'
+# Function to send a command to GRBL and print the response
+def send_command(command):
+    print(f'Sending: {command}')
+    s.write((command + '\n').encode())
+    grbl_out = s.readline()
+    print(f' : {grbl_out.strip().decode()}')
+
+# Function to query GRBL status
+def query_status():
+    print('Querying status...')
+    s.write(b'?\n')
+    grbl_out = s.readline()
+    print(f'Status: {grbl_out.strip().decode()}')
+
+# Initialize GRBL
 try:
-    with open(gcode_file, 'r') as f:
-        # Wake up grbl
-        s.write(b"\r\n\r\n")
-        time.sleep(2)  # Wait for grbl to initialize
-        s.flushInput()  # Flush startup text in serial input
+    # Wake up GRBL
+    s.write(b"\r\n\r\n")
+    time.sleep(2)  # Wait for GRBL to initialize
+    s.flushInput()  # Flush startup text in serial input
 
-        # Stream g-code to grbl
-        for line in f:
-            l = line.strip()  # Strip all EOL characters for consistency
-            print(f'Sending: {l}')
-            s.write((l + '\n').encode())  # Send g-code block to grbl
-            grbl_out = s.readline()  # Wait for grbl response with carriage return
-            print(f' : {grbl_out.strip().decode()}')
+    # Clear any previous errors
+    send_command('~')  # Resume from error or pause state
 
-except FileNotFoundError:
-    print(f"G-code file {gcode_file} not found.")
-except Exception as e:
-    print(f"Error reading g-code file {gcode_file}: {e}")
+    # Query GRBL status
+    query_status()
 
-# Close serial port
-s.close()
+    # Open G-code file
+    gcode_file = 'output.gcode'
+    try:
+        with open(gcode_file, 'r') as f:
+            # Stream G-code to GRBL
+            for line in f:
+                send_command('$X')  # Unlocks GRBL if it's in an alarm state
+                l = line.strip()  # Strip all EOL characters for consistency
+                send_command(l)
+
+    except FileNotFoundError:
+        print(f"G-code file {gcode_file} not found.")
+    except Exception as e:
+        print(f"Error reading G-code file {gcode_file}: {e}")
+
+finally:
+    # Close serial port
+    s.close()

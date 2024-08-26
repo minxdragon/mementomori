@@ -20,7 +20,7 @@ import time
 
 def send_gcode_to_plotter(gcode_file):
     # Adjust the serial settings for your plotter
-    ser = serial.Serial('/dev/ttyUSB0', 115200)  # Replace with the actual serial port and baud rate
+    ser = serial.Serial('tty.usbserial-10', 115200)  # Replace with the actual serial port and baud rate
 
     with open(gcode_file, 'r') as f:
         for line in f:
@@ -138,9 +138,9 @@ def main():
     svg_file = "output.svg"  # Replace with the actual SVG file name
     gcode_file = "output.gcode"  # Output G-code file name
 
-    # Convert SVG to G-code using Inkscape's command-line interface
-    inkscape_command = f"inkscape {svg_file} --export-filename={gcode_file} --export-plain-svg --verb=Extensions.Gcodetools.Plot"
-    subprocess.run(inkscape_command, shell=True)
+    # # Convert SVG to G-code using Inkscape's command-line interface
+    # inkscape_command = f"inkscape {svg_file} --export-filename={gcode_file} --export-plain-svg --verb=Extensions.Gcodetools.Plot"
+    # subprocess.run(inkscape_command, shell=True)
 
     # Send G-code to the plotter via serial connection
     send_gcode_to_plotter(gcode_file)

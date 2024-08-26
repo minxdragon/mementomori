@@ -32,28 +32,22 @@ sleep 2
 
 echo "Starting drawing process..."
 # Send G-code commands to draw a square
-send_gcode "G1 Z5 F500"    # Raise the pen
-echo "Pen raised."
+send_gcode "G1 X20 Y20 F1500"  # Move to the starting point (0,0)
+# echo "Moved to starting point (0,0)."
 
-send_gcode "G1 X0 Y0 F1500"  # Move to the starting point (0,0)
-echo "Moved to starting point (0,0)."
-
-send_gcode "G1 Z0 F500"    # Lower the pen
-echo "Pen lowered."
-
-send_gcode "G1 X10 Y0 F1000"  # Draw the first side (10mm along X-axis)
+send_gcode "G1 X80 Y0 F1000"  # Draw the first side (10mm along X-axis)
 echo "Drawing first side."
 
-send_gcode "G1 X10 Y10 F1000"  # Draw the second side (10mm along Y-axis)
+send_gcode "G1 X80 Y80 F1000"  # Draw the second side (10mm along Y-axis)
 echo "Drawing second side."
 
-send_gcode "G1 X0 Y10 F1000"  # Draw the third side (back to Y=10, X=0)
+send_gcode "G1 X0 Y80 F1000"  # Draw the third side (back to Y=10, X=0)
 echo "Drawing third side."
 
-send_gcode "G1 X0 Y0 F1000"   # Draw the fourth side (back to origin)
+send_gcode "G1 X20 Y20 F1000"   # Draw the fourth side (back to origin)
 echo "Drawing fourth side."
 
-send_gcode "G1 Z5 F500"    # Raise the pen after drawing
+# send_gcode "G1 Z5 F500"    # Raise the pen after drawing
 echo "Pen raised after drawing."
 
 echo "Square drawn on the plotter."
