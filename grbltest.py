@@ -16,7 +16,9 @@ def send_command(command):
     print(f'Sending: {command}')
     s.write((command + '\n').encode())
     grbl_out = s.readline()
-    print(f' : {grbl_out.strip().decode()}')
+    response = grbl_out.strip().decode()
+    print(f' : {response}')
+    return response
 
 # Function to query GRBL status
 def query_status():
@@ -34,19 +36,27 @@ try:
 
     # Clear any previous errors
     send_command('~')  # Resume from error or pause state
-
-    # Query GRBL status
-    query_status()
-
+    
     # Open G-code file
     gcode_file = 'output.gcode'
     try:
         with open(gcode_file, 'r') as f:
             # Stream G-code to GRBL
             for line in f:
-                send_command('$X')  # Unlocks GRBL if it's in an alarm state
+                # Set feed rate inside the loop if necessary
+                send_command('F1000')  # Set the feed rate to 1000 mm/min
+
+                # Unlock GRBL if it's in an alarm state
+                response = send_command('$X')
+                if 'error' in response.lower():
+                    print("Error detected, resetting GRBL...")
+                    send_command('$X')  # Unlock GRBL if it's in an alarm state
+                
                 l = line.strip()  # Strip all EOL characters for consistency
-                send_command(l)
+                response = send_command(l)
+                if 'error' in response.lower():
+                    print("Error detected, resetting GRBL...")
+                    send_command('$X')  # Unlock GRBL if it's in an alarm state
 
     except FileNotFoundError:
         print(f"G-code file {gcode_file} not found.")
