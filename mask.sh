@@ -39,7 +39,18 @@ python3 $PYTHON_SCRIPT
 #convert SVG to GCode using vpype
 echo "Converting SVG to G-code..."
 #vpype read $TEMP_SVG gwrite --profile gcode $OUTPUT_GCODE
-vpype -v read /Users/j_laptop/Development/mementomori/output.svg   gwrite --profile gcode output.gcode
+
+#vpype shaded version between points
+#vpype -v read /Users/j_laptop/Development/mementomori/output.svg linesimplify linemerge gwrite --profile gcode output.gcode 
+
+#vpype outline version
+vpype \
+  read output.svg \
+  linemerge --tolerance 0.1mm \
+  linesort \
+  reloop \
+  linesimplify \
+  gwrite --profile gcode output.gcode
 echo "G-code file created: $OUTPUT_GCODE"
 
 # Step 4: Send the G-code to the plotter
