@@ -36,7 +36,10 @@ try:
 
     # Clear any previous errors
     send_command('~')  # Resume from error or pause state
-    
+
+    # Define home location using G92 (set position to zero)
+    send_command('G92 X20 Y20')  # Sets the current position as (20,20)
+
     # Open G-code file
     gcode_file = 'output.gcode'
     try:

@@ -46,19 +46,7 @@ echo "G-code file created: $OUTPUT_GCODE"
 echo "Sending G-code to the plotter..."
 # You can use Python or bash to send the G-code to the plotter
 # Example using Python:
-python3 <<EOF
-import serial
-import time
-
-ser = serial.Serial('/dev/tty.usbserial-10', 115200)  # Replace with your serial port and baud rate
-
-with open("$SVG_DIR/$GCODE_FILE", 'r') as f:
-    for line in f:
-        ser.write(line.encode() + b'\n')
-        time.sleep(0.1)  # Small delay to ensure commands are processed
-
-
-EOF
+python3 grbltest.py $GCODE_FILE
 
 echo "G-code sent to plotter."
 
