@@ -18,16 +18,16 @@ import subprocess
 import serial
 import time
 
-def send_gcode_to_plotter(gcode_file):
-    # Adjust the serial settings for your plotter
-    ser = serial.Serial('tty.usbserial-10', 115200)  # Replace with the actual serial port and baud rate
+# def send_gcode_to_plotter(gcode_file):
+#     # Adjust the serial settings for your plotter
+#     ser = serial.Serial('tty.usbserial-10', 115200)  # Replace with the actual serial port and baud rate
 
-    with open(gcode_file, 'r') as f:
-        for line in f:
-            ser.write(line.encode() + b'\n')
-            time.sleep(0.1)  # Small delay to ensure commands are processed
+#     with open(gcode_file, 'r') as f:
+#         for line in f:
+#             ser.write(line.encode() + b'\n')
+#             time.sleep(0.1)  # Small delay to ensure commands are processed
 
-    ser.close()
+#     ser.close()
     
 def main():
 
@@ -83,14 +83,14 @@ def main():
     plt.show()
 
     # # Apply Sobel edge detection
-    # print("Applying Sobel edge detection...")
-    # sobelx = cv2.Sobel(binary_mask, cv2.CV_64F, 1, 0, ksize=5)
-    # sobely = cv2.Sobel(binary_mask, cv2.CV_64F, 0, 1, ksize=5)
-        # Combine the two results
-    #edges = cv2.magnitude(sobelx, sobely)
+    print("Applying Sobel edge detection...")
+    sobelx = cv2.Sobel(binary_mask, cv2.CV_64F, 1, 0, ksize=5)
+    sobely = cv2.Sobel(binary_mask, cv2.CV_64F, 0, 1, ksize=5)
+       # Combine the two results
+    edges = cv2.magnitude(sobelx, sobely)
 
-    print("Applying Canny edge detection...")
-    edges = cv2.Canny(binary_mask, 100, 200)
+    # print("Applying Canny edge detection...")
+    # edges = cv2.Canny(binary_mask, 100, 200)
 
     # Normalize the pixel values to the range [0, 255]
     edges = cv2.normalize(edges, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
@@ -134,16 +134,16 @@ def main():
     # Convert the binary image to SVG
     print("Converting binary image to SVG...")
     init.main()
-    print("initializing plotter code")
-    svg_file = "output.svg"  # Replace with the actual SVG file name
-    gcode_file = "output.gcode"  # Output G-code file name
+    # print("initializing plotter code")
+    # svg_file = "output.svg"  # Replace with the actual SVG file name
+    # gcode_file = "output.gcode"  # Output G-code file name
 
-    # # Convert SVG to G-code using Inkscape's command-line interface
-    # inkscape_command = f"inkscape {svg_file} --export-filename={gcode_file} --export-plain-svg --verb=Extensions.Gcodetools.Plot"
-    # subprocess.run(inkscape_command, shell=True)
+    # # # Convert SVG to G-code using Inkscape's command-line interface
+    # # inkscape_command = f"inkscape {svg_file} --export-filename={gcode_file} --export-plain-svg --verb=Extensions.Gcodetools.Plot"
+    # # subprocess.run(inkscape_command, shell=True)
 
-    # Send G-code to the plotter via serial connection
-    send_gcode_to_plotter(gcode_file)
+    # # Send G-code to the plotter via serial connection
+    # send_gcode_to_plotter(gcode_file)
 
 if __name__ == "__main__":
     main()

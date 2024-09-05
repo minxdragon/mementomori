@@ -13,11 +13,11 @@ except Exception as e:
 
 # Function to send a command to GRBL and print the response
 def send_command(command):
-    print(f'Sending: {command}')
+    #print(f'Sending: {command}')
     s.write((command + '\n').encode())
     grbl_out = s.readline()
     response = grbl_out.strip().decode()
-    print(f' : {response}')
+    #print(f' : {response}')
     return response
 
 # Function to query GRBL status
@@ -52,19 +52,37 @@ try:
                 # Unlock GRBL if it's in an alarm state
                 response = send_command('$X')
                 if 'error' in response.lower():
-                    print("Error detected, resetting GRBL...")
+                    #print("Error detected, resetting GRBL...")
                     send_command('$X')  # Unlock GRBL if it's in an alarm state
                 
                 l = line.strip()  # Strip all EOL characters for consistency
                 response = send_command(l)
                 if 'error' in response.lower():
-                    print("Error detected, resetting GRBL...")
+                    #print("Error detected, resetting GRBL...")
                     send_command('$X')  # Unlock GRBL if it's in an alarm state
 
     except FileNotFoundError:
         print(f"G-code file {gcode_file} not found.")
     except Exception as e:
         print(f"Error reading G-code file {gcode_file}: {e}")
+    # Track last position
+    last_position = None
+
+    with open(gcode_file, 'r') as f:
+        for line in f:
+            l = line.strip()  # Strip all EOL characters for consistency
+            
+            # Skip the line if it repeats the last command
+            if l == last_position:
+                continue
+            
+            response = send_command(l)
+            
+            if 'error' in response.lower():
+                send_command('$X')  # Unlock GRBL if it's in an alarm state
+            
+            last_position = l  # Store the current command as the last position
+
 
 finally:
     # Close serial port

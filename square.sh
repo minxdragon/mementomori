@@ -32,6 +32,7 @@ sleep 2
 
 echo "Starting drawing process..."
 # Send G-code commands to draw a square
+response = send_command('$X')
 send_gcode "G1 X20 Y20 F1500"  # Move to the starting point (0,0)
 # echo "Moved to starting point (0,0)."
 
