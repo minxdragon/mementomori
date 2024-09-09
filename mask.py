@@ -13,22 +13,7 @@ import init
 import xml.etree.ElementTree as ET
 from svgoutline import svg_to_outlines
 from PIL import Image
-import os
-import subprocess
-import serial
-import time
-
-# def send_gcode_to_plotter(gcode_file):
-#     # Adjust the serial settings for your plotter
-#     ser = serial.Serial('tty.usbserial-10', 115200)  # Replace with the actual serial port and baud rate
-
-#     with open(gcode_file, 'r') as f:
-#         for line in f:
-#             ser.write(line.encode() + b'\n')
-#             time.sleep(0.1)  # Small delay to ensure commands are processed
-
-#     ser.close()
-    
+ 
 def main():
 
     print("Loading model...")
@@ -134,6 +119,54 @@ def main():
     # Convert the binary image to SVG
     print("Converting binary image to SVG...")
     init.main()
+    import xml.etree.ElementTree as ET
+
+def crop_svg(svg_file, output_file):
+    # Parse the SVG file
+    tree = ET.parse(svg_file)
+    root = tree.getroot()
+
+    # SVG namespace
+    ns = {'svg': 'http://www.w3.org/2000/svg'}
+
+    # Initialize bounding box variables
+    min_x, min_y, max_x, max_y = float('inf'), float('inf'), float('-inf'), float('-inf')
+
+    # Loop through all elements to calculate the bounding box
+    for elem in root.findall('.//svg:path', ns):  # You may need to adjust for different element types
+        d = elem.get('d')
+        if d:
+            # Extract the coordinates from the 'd' attribute of the path
+            path_commands = d.split(' ')
+            for command in path_commands:
+                try:
+                    # Try to convert command to a float, which represents a coordinate
+                    x_or_y = float(command)
+                    if 'M' in path_commands or 'L' in path_commands:  # If it's a move or line command
+                        min_x = min(min_x, x_or_y)
+                        max_x = max(max_x, x_or_y)
+                        # Assume next one is y
+                        min_y = min(min_y, x_or_y)
+                        max_y = max(max_y, x_or_y)
+                except ValueError:
+                    pass
+
+    # Calculate width and height of the cropped content
+    width = max_x - min_x
+    height = max_y - min_y
+
+    # Update the viewBox attribute to crop the SVG
+    root.set('viewBox', f"{min_x} {min_y} {width} {height}")
+    root.set('width', str(width))
+    root.set('height', str(height))
+
+    # Write the cropped SVG to a new file
+    tree.write(output_file)
+    print(f"Cropped SVG saved as {output_file}")
+
+# Example usage
+
+
     # print("initializing plotter code")
     # svg_file = "output.svg"  # Replace with the actual SVG file name
     # gcode_file = "output.gcode"  # Output G-code file name

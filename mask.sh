@@ -52,14 +52,29 @@ echo "Converting SVG to G-code..."
 #   hatch -p 0.2mm -a 45 \
 #   gwrite --profile gcode "$SVG_DIR/$GCODE_FILE"
 
+
 #vpype outline version
 vpype \
   read output.svg \
-  linemerge --tolerance 0.1mm \
+  linesort \
+  linemerge --tolerance 0.2mm \
+  layout --fit-to-margins 2cm a3 \
+  linesimplify --tolerance 0.2mm \
   linesort \
   reloop \
   linesimplify \
+  translate 15cm 10cm \
   gwrite --profile gcode output.gcode
+
+#   vpype \
+#   read output.svg \
+#   linemerge --tolerance 0.2mm \
+#   linesort \
+#   linesimplify --tolerance 0.2mm \
+#   crop 10mm 10mm 200mm 287mm \  # Adjust the crop dimensions to fit your specific needs
+#   #hatch --distance 2mm --angle 45 \  # Optional, for hatching inside closed paths
+#   layout --fit-to-margins 2cm a4 \
+#   gwrite --profile gcode output.gcode
 
 echo "G-code file created: $OUTPUT_GCODE"
 
@@ -73,4 +88,4 @@ echo "G-code sent to plotter."
 
 # Loop back to the beginning if you want this to be continuous
 # Uncomment the next line if you want the script to loop
-# exec "$0"
+exec "$0"

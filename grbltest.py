@@ -1,89 +1,58 @@
 import serial
 import time
 
-# Open GRBL serial port
-serial_port = '/dev/tty.usbserial-10'
-baud_rate = 115200
+def open_serial_connection(port, rate):
+    try:
+        return serial.Serial(port, rate)
+    except Exception as e:
+        print(f"Failed to open serial port {port}: {e}")
+        exit(1)
 
-try:
-    s = serial.Serial(serial_port, baud_rate)
-except Exception as e:
-    print(f"Failed to open serial port {serial_port}: {e}")
-    exit(1)
-
-# Function to send a command to GRBL and print the response
-def send_command(command):
-    #print(f'Sending: {command}')
-    s.write((command + '\n').encode())
-    grbl_out = s.readline()
-    response = grbl_out.strip().decode()
-    #print(f' : {response}')
+def send_command(ser, command):
+    #print(f'Sending: {command}')  # Uncomment for detailed logs
+    ser.write((command + '\n').encode())
+    response = ser.readline().strip().decode()
+    #print(f'Response: {response}')  # Uncomment for detailed logs
     return response
 
-# Function to query GRBL status
-def query_status():
-    print('Querying status...')
-    s.write(b'?\n')
-    grbl_out = s.readline()
-    print(f'Status: {grbl_out.strip().decode()}')
-
-# Initialize GRBL
-try:
-    # Wake up GRBL
-    s.write(b"\r\n\r\n")
-    time.sleep(2)  # Wait for GRBL to initialize
-    s.flushInput()  # Flush startup text in serial input
-
-    # Clear any previous errors
-    send_command('~')  # Resume from error or pause state
-
-    # Define home location using G92 (set position to zero)
-    send_command('G92 X20 Y20')  # Sets the current position as (20,20)
-
-    # Open G-code file
+def main():
+    serial_port = '/dev/tty.usbserial-10'
+    baud_rate = 115200
     gcode_file = 'output.gcode'
+
+    ser = open_serial_connection(serial_port, baud_rate)
+
     try:
-        with open(gcode_file, 'r') as f:
-            # Stream G-code to GRBL
-            for line in f:
-                # Set feed rate inside the loop if necessary
-                send_command('F1000')  # Set the feed rate to 1000 mm/min
+        # Initialize GRBL
+        ser.write(b"\r\n\r\n")  # Wake up GRBL
+        time.sleep(2)  # Wait for GRBL to initialize
+        ser.flushInput()  # Flush startup text in serial input
 
-                # Unlock GRBL if it's in an alarm state
-                response = send_command('$X')
-                if 'error' in response.lower():
-                    #print("Error detected, resetting GRBL...")
-                    send_command('$X')  # Unlock GRBL if it's in an alarm state
-                
-                l = line.strip()  # Strip all EOL characters for consistency
-                response = send_command(l)
-                if 'error' in response.lower():
-                    #print("Error detected, resetting GRBL...")
-                    send_command('$X')  # Unlock GRBL if it's in an alarm state
+        # Define and move to initial home position
+        send_command(ser, 'G28')  # Alternatively, 'G92 X0 Y0' to set current position as home
 
-    except FileNotFoundError:
-        print(f"G-code file {gcode_file} not found.")
-    except Exception as e:
-        print(f"Error reading G-code file {gcode_file}: {e}")
-    # Track last position
-    last_position = None
+        # Process G-code file
+        try:
+            with open(gcode_file, 'r') as f:
+                for line in f:
+                    send_command(ser, '$X')
+                    l = line.strip()
+                    if l:  # Ensure the line is not empty
+                        response = send_command(ser, l)
+                        if 'error' in response.lower():
+                            send_command(ser, '$X')  # Clear any errors
+        except FileNotFoundError:
+            print(f"G-code file {gcode_file} not found.")
+        except Exception as e:
+            print(f"Error reading G-code file {gcode_file}: {e}")
 
-    with open(gcode_file, 'r') as f:
-        for line in f:
-            l = line.strip()  # Strip all EOL characters for consistency
-            
-            # Skip the line if it repeats the last command
-            if l == last_position:
-                continue
-            
-            response = send_command(l)
-            
-            if 'error' in response.lower():
-                send_command('$X')  # Unlock GRBL if it's in an alarm state
-            
-            last_position = l  # Store the current command as the last position
+        # Ensure to return to home position
+        send_command(ser, 'G0 X0 Y0')  # Move back to home position
 
+        time.sleep(1)  # Give some time for the last command to complete
 
-finally:
-    # Close serial port
-    s.close()
+    finally:
+        ser.close()
+
+if __name__ == "__main__":
+    main()

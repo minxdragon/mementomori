@@ -168,16 +168,48 @@ def joined_edges(assorted_edges, keep_every_point=False):
 #     return s.getvalue()
 
 #new function
+# def rgba_image_to_svg_contiguous(im, filename):
+#     width, height = im.size
+#     with open(filename, 'w') as f:
+#         f.write('<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="%d" height="%d">\n' % (width, height))
+#         for y in range(height):
+#             for x in range(width):
+#                 rgba = im.getpixel((x, y))
+#                 if rgba[3]:  # if pixel is not transparent
+#                     f.write('  <rect x="%d" y="%d" width="1" height="1" style="fill:rgb%s; fill-opacity:%.3f; stroke:none;" />\n' % (x, y, rgba[0:3], float(rgba[3]) / 255))
+#         f.write('</svg>\n')
 def rgba_image_to_svg_contiguous(im, filename):
     width, height = im.size
+
+    # Initialize bounding box variables
+    min_x, min_y = width, height
+    max_x, max_y = 0, 0
+
+    # First pass: find the bounding box of non-transparent pixels
+    for y in range(height):
+        for x in range(width):
+            rgba = im.getpixel((x, y))
+            if rgba[3]:  # if pixel is not transparent
+                min_x = min(min_x, x)
+                min_y = min(min_y, y)
+                max_x = max(max_x, x)
+                max_y = max(max_y, y)
+
+    # Calculate the cropped width and height
+    cropped_width = max_x - min_x + 1
+    cropped_height = max_y - min_y + 1
+
+    # Second pass: write the SVG file
     with open(filename, 'w') as f:
-        f.write('<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="%d" height="%d">\n' % (width, height))
+        f.write('<svg xmlns="http://www.w3.org/2000/svg" version="1.1" ')
+        f.write('width="%d" height="%d" viewBox="%d %d %d %d">\n' % (cropped_width, cropped_height, min_x, min_y, cropped_width, cropped_height))
         for y in range(height):
             for x in range(width):
                 rgba = im.getpixel((x, y))
                 if rgba[3]:  # if pixel is not transparent
                     f.write('  <rect x="%d" y="%d" width="1" height="1" style="fill:rgb%s; fill-opacity:%.3f; stroke:none;" />\n' % (x, y, rgba[0:3], float(rgba[3]) / 255))
         f.write('</svg>\n')
+
 
 def rgba_image_to_svg_pixels(im, opaque=None):
     s = StringIO()
