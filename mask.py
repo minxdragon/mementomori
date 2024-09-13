@@ -13,30 +13,31 @@ import init
 import xml.etree.ElementTree as ET
 from svgoutline import svg_to_outlines
 from PIL import Image
+import matplotlib.pyplot as plt
+from svgpathtools import svg2paths, wsvg, Path, Line
  
 def main():
-
     print("Loading model...")
     model = create_model("Unet_2020-07-20")
     model.eval()
 
-    #save webcam as image
+    # Capture an image from the webcam
     print("Running webcam...")
     cap = cv2.VideoCapture(0)
 
-    # Capture a single frame
     ret, frame = cap.read()
-
     if ret:
-        # Save the frame as an image
         cv2.imwrite('webcam.jpg', frame)
         print("Image captured and saved as 'webcam.jpg'")
     else:
         print("Failed to capture frame")
+        cap.release()
+        return
 
     cap.release()
+
+    # Predict segmentation mask
     image = load_rgb("webcam.jpg")
-    #imshow(image)
     print("Predicting mask...")
     transform = albu.Compose([albu.Normalize(p=1)], p=1)
     padded_image, pads = pad(image, factor=32, border=cv2.BORDER_CONSTANT)
@@ -46,30 +47,45 @@ def main():
         prediction = model(x)[0][0]
         mask = (prediction > 0).cpu().numpy().astype(np.uint8)
         mask = unpad(mask, pads)
-        print("Mask predicted")
-        #imshow(mask)
-    plt.show()
-
-    # Normalize the pixel values to the range [0, 255]
-    mask = cv2.normalize(mask, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
 
     # Save the mask as an image
-    cv2.imwrite('mask.jpg', mask)
+    cv2.imwrite('mask.jpg', mask * 255)  # Multiply by 255 to make it visible as a binary mask
     print("Mask saved as 'mask.jpg'")
 
-    # Convert the mask to a binary image
-    mask = cv2.imread('mask.jpg', cv2.IMREAD_GRAYSCALE)
-    _, binary_mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+    # Convert the mask to a binary image for contour finding
+    print("Converting mask to binary for contour detection...")
+    _, binary_mask = cv2.threshold(mask * 255, 127, 255, cv2.THRESH_BINARY)
 
-    # Save the binary mask as an image
+    # Save binary mask for visualization
     cv2.imwrite('binary_mask.jpg', binary_mask)
-    print("Binary mask saved as 'binary_mask.jpg'")
-    #imshow(mask)
-    plt.show()
+
+    # # Find contours on the binary mask
+    # print("Finding contours...")
+    # contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # # Create a blank canvas for simplified shapes
+    # contour_mask = np.zeros_like(binary_mask)
+
+    # # Loop through contours and apply approximation (simplification)
+    # for contour in contours:
+    #     epsilon = 0.02 * cv2.arcLength(contour, True)  # Adjust this value for simplification
+    #     approx = cv2.approxPolyDP(contour, epsilon, True)
+
+    #     # Draw the approximated polygon on the blank canvas
+    #     cv2.drawContours(contour_mask, [approx], 0, 255, -1)  # Fill polygon
+
+    # # Plot the result using matplotlib
+    # plt.imshow(contour_mask, cmap='gray')
+    # plt.title("Simplified Geometric Contours")
+    # #plt.show()
+
+    # # Save the simplified contours
+    # cv2.imwrite('simplified_contours.png', contour_mask)
+    # print("Simplified contours saved as 'simplified_contours.png'")
 
     # # Apply Sobel edge detection
     print("Applying Sobel edge detection...")
-    sobelx = cv2.Sobel(binary_mask, cv2.CV_64F, 1, 0, ksize=5)
+    sobelx = cv2.Sobel(binary_mask, cv2.CV_64F, 1, 0, ksize=5) #change to contour_mask if we're doing the angled work
     sobely = cv2.Sobel(binary_mask, cv2.CV_64F, 0, 1, ksize=5)
        # Combine the two results
     edges = cv2.magnitude(sobelx, sobely)
@@ -83,6 +99,7 @@ def main():
     # Save the edge image
     print("Saving edge image as 'mask_edges.jpg'")
     cv2.imwrite('mask_edges.jpg', edges)
+
 
     # Convert the edges image to a binary image
     _, binary = cv2.threshold(edges, 127, 255, cv2.THRESH_BINARY)
@@ -102,6 +119,7 @@ def main():
 
     # Save the binary image
     cv2.imwrite(filename, binary)
+    
 
     #convert the white pixels to transparent
     img = Image.open(filename)

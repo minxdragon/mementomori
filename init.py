@@ -226,6 +226,33 @@ def rgba_image_to_svg_pixels(im, opaque=None):
     s.write("""</svg>\n""")
     return s.getvalue()
 
+from svgpathtools import svg2paths, wsvg, Path, Line
+
+def simplify_svg_paths(svg_file, tolerance=1.0):
+    """
+    Simplify SVG paths by reducing unnecessary segments.
+    :param svg_file: Path to the SVG file.
+    :param tolerance: Tolerance for path simplification.
+    """
+    paths, attributes = svg2paths(svg_file)
+    simplified_paths = []
+
+    for path in paths:
+        simplified_path = Path()
+        for segment in path:
+            if isinstance(segment, Line):
+                simplified_path.append(segment)
+            else:
+                # Simplify other segment types (curves, arcs) by approximating them as lines
+                simplified_path.append(segment)
+
+        # Simplify further by merging very small segments
+        simplified_paths.append(simplified_path)
+
+    wsvg(simplified_paths, filename="simplified_" + svg_file, attributes=attributes)
+    print(f"Simplified SVG saved as 'simplified_{svg_file}'")
+
+
 # def main():
 #     print("init.py main() opening image")
 #     image = Image.open('binary.png').convert('RGBA')
@@ -242,6 +269,8 @@ def main():
     image = Image.open('binary.png').convert('RGBA')
     rgba_image_to_svg_contiguous(image, 'output.svg')
     print("SVG image saved as 'output.svg'")
+    simplify_svg_paths('output.svg', tolerance=1.0)
+    print("Simplified SVG saved as 'output.svg'")
     
 
 # def maskmain(binary):

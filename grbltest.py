@@ -18,7 +18,7 @@ def send_command(ser, command):
 def main():
     serial_port = '/dev/tty.usbserial-10'
     baud_rate = 115200
-    gcode_file = 'output.gcode'
+    gcode_file = 'modified_output.gcode'
 
     ser = open_serial_connection(serial_port, baud_rate)
 
