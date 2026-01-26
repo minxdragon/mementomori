@@ -118,17 +118,15 @@ def load_random_fill_image(gen_folder: str) -> Image.Image | None:
     except Exception:
         return None
 
-def render_layer(
+def render_fill_layer(
     W: int,
     H: int,
     items: List[Tuple[Box, str]],
     gen_folder: str,
-    tile_alpha: int = 140,        # 0–255, lower = more translucent
-    outline_width_box: int = 6,
-    outline_width_intersect: int = 8,
-):
+    tile_alpha_box: int = 140,
+    tile_alpha_intersect: int = 220,  # intersections read stronger
+) -> Image.Image:
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(layer)
 
     for b, kind in items:
         if b.area == 0:
@@ -138,27 +136,39 @@ def render_layer(
         if src is None:
             continue
 
-        tile = center_crop_to_aspect(src, b.w, b.h)
+        tile = center_crop_to_aspect(src.convert("RGBA"), b.w, b.h)
 
-        # force translucency
-        if tile.mode != "RGBA":
-            tile = tile.convert("RGBA")
-
+        target_alpha = tile_alpha_intersect if kind == "intersect" else tile_alpha_box
         r, g, bl, a = tile.split()
-        a = a.point(lambda _: tile_alpha)
+        a = a.point(lambda _: target_alpha)
         tile = Image.merge("RGBA", (r, g, bl, a))
 
         layer.alpha_composite(tile, dest=(b.x1, b.y1))
 
-        # opaque bright green outline
+    return layer
+
+
+def render_outline_layer(
+    W: int,
+    H: int,
+    items: List[Tuple[Box, str]],
+    outline_width_box: int = 6,
+    outline_width_intersect: int = 10,
+) -> Image.Image:
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+
+    for b, kind in items:
+        if b.area == 0:
+            continue
+
         width = outline_width_intersect if kind == "intersect" else outline_width_box
-        draw.rectangle(
-            [b.x1, b.y1, b.x2, b.y2],
-            outline=(0, 255, 0, 255),
-            width=width,
-        )
+        color = (0, 255, 0, 255)  # fully opaque bright green
+
+        draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=color, width=width)
 
     return layer
+
 
 def main():
     gen_folder = "/Users/j_laptop/mementomori/gen_images"
@@ -191,19 +201,25 @@ def main():
         boxes = boxes_from_yolo(persons, W, H, conf_thresh=0.25, q=8)
         items = add_pairwise_intersections(boxes, min_area=800)
 
-        # only draw new rects, avoids jitter filling forever
-        filtered = []
+        # 1) fill only new rects (both box + intersect)
+        new_items = []
         for b, kind in items:
             key = (b.x1, b.y1, b.x2, b.y2, kind)
             if key in seen:
                 continue
             seen.add(key)
-            filtered.append((b, kind))
+            new_items.append((b, kind))
 
-        layer = render_layer(W, H, filtered, gen_folder=gen_folder)
+        fill_layer = render_fill_layer(W, H, new_items, gen_folder=gen_folder)
 
-        acc.alpha_composite(layer)
+        # 2) outlines for current intersections every tick (always bright, always on top)
+        current_intersections = [(b, kind) for (b, kind) in items if kind == "intersect"]
+        outline_layer = render_outline_layer(W, H, current_intersections)
+
+        acc.alpha_composite(fill_layer)
+        acc.alpha_composite(outline_layer)  # last write wins, keeps lines bright
         acc.save(out_path)
+
 
         time.sleep(10.0)
 
