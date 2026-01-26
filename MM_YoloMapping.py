@@ -121,17 +121,23 @@ def load_random_fill_image(gen_folder: str) -> Image.Image | None:
 
 def render_fill_layer(W, H, items, gen_folder):
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    filled_keys = []
 
     for b, kind in items:
         if b.area == 0:
             continue
+
         src = load_random_fill_image(gen_folder)
         if src is None:
             continue
+
         tile = center_crop_to_aspect(src.convert("RGBA"), b.w, b.h)
         layer.alpha_composite(tile, dest=(b.x1, b.y1))
 
-    return layer
+        filled_keys.append((b.x1, b.y1, b.x2, b.y2, kind))
+
+    return layer, filled_keys
+
 
 
 def render_outline_layer(W, H, items, w_box=6, w_inter=12):
@@ -190,26 +196,31 @@ def main():
         boxes = boxes_from_yolo(persons, W, H, conf_thresh=0.25, q=24)
         items = add_pairwise_intersections(boxes, min_area=800)
 
-        # new rects only (boxes + intersections)
-        new_items = []
+                # candidates (do NOT add to seen yet)
+        candidates = []
         for b, kind in items:
             key = (b.x1, b.y1, b.x2, b.y2, kind)
             if key in seen:
                 continue
-            seen.add(key)
-            new_items.append((b, kind))
+            candidates.append((b, kind))
 
-        # fill only new rects
-        fill_layer = render_fill_layer(W, H, new_items, gen_folder=gen_folder)
+        # fill candidates, returns (layer, filled_keys)
+        fill_layer, filled_keys = render_fill_layer(W, H, candidates, gen_folder=gen_folder)
         acc_fill.alpha_composite(fill_layer)
 
-        # persist outlines for new rects
-        draw_outlines_in_place(acc_lines, new_items, w_box=6, w_inter=14)
+        # mark only successfully filled rects as seen
+        for key in filled_keys:
+            seen.add(key)
+
+        # persist outlines only for successfully filled rects
+        new_for_lines = [(Box(x1, y1, x2, y2), kind) for (x1, y1, x2, y2, kind) in filled_keys]
+        draw_outlines_in_place(acc_lines, new_for_lines, w_box=6, w_inter=14)
 
         # output: fills + all past outlines
         out = acc_fill.copy()
         out.alpha_composite(acc_lines)
         out.save(out_path)
+        print("boxes", len(boxes), "items", len(items), "candidates", len(candidates), "filled", len(filled_keys))
 
         time.sleep(10.0)
 
