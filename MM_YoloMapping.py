@@ -65,8 +65,9 @@ def boxes_from_yolo(persons, W: int, H: int, conf_thresh: float = 0.25, q: int =
         b = Box(int(x1), int(y1), int(x2), int(y2))
         b = clamp_box(b, W, H)
         b = quantize_box(b, q)
-        if b.area > 0:
-            out.append(b)
+        if b.w < 60 or b.h < 60:
+            continue
+        out.append(b)
     return out
 
 def add_pairwise_intersections(boxes: List[Box], min_area: int = 400) -> List[Tuple[Box, str]]:
@@ -149,6 +150,10 @@ def draw_outlines_in_place(img: Image.Image, items: List[Tuple[Box, str]], w_box
         if b.area == 0:
             continue
         width = w_inter if kind == "intersect" else w_box
+
+        # black under-stroke
+        draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=(0, 0, 0, 255), width=width + 2)
+        # green stroke
         draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=(0, 255, 0, 255), width=width)
 
 def main():
@@ -182,7 +187,7 @@ def main():
         results = model(frame)
         persons = results.xyxy[0].cpu().numpy()
 
-        boxes = boxes_from_yolo(persons, W, H, conf_thresh=0.25, q=8)
+        boxes = boxes_from_yolo(persons, W, H, conf_thresh=0.25, q=24)
         items = add_pairwise_intersections(boxes, min_area=800)
 
         # new rects only (boxes + intersections)
