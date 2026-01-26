@@ -143,6 +143,13 @@ def render_outline_layer(W, H, items, w_box=6, w_inter=12):
         draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=(0,255,0,255), width=width)
     return layer
 
+def draw_outlines_in_place(img: Image.Image, items: List[Tuple[Box, str]], w_box=6, w_inter=14):
+    draw = ImageDraw.Draw(img)
+    for b, kind in items:
+        if b.area == 0:
+            continue
+        width = w_inter if kind == "intersect" else w_box
+        draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=(0, 255, 0, 255), width=width)
 
 def main():
     gen_folder = "/Users/j_laptop/mementomori/gen_images"
@@ -156,6 +163,7 @@ def main():
     model.eval()
 
     acc_fill = None
+    acc_lines = None
     seen = set()
 
     while True:
@@ -168,7 +176,8 @@ def main():
 
         if acc_fill is None or acc_fill.size != (W, H):
             acc_fill = Image.new("RGBA", (W, H), (0, 0, 0, 255))
-            seen = set()  # reset if resolution changes
+            acc_lines = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            seen = set()
 
         results = model(frame)
         persons = results.xyxy[0].cpu().numpy()
@@ -176,7 +185,7 @@ def main():
         boxes = boxes_from_yolo(persons, W, H, conf_thresh=0.25, q=8)
         items = add_pairwise_intersections(boxes, min_area=800)
 
-        # fill only new rects (including new intersection rects)
+        # new rects only (boxes + intersections)
         new_items = []
         for b, kind in items:
             key = (b.x1, b.y1, b.x2, b.y2, kind)
@@ -185,14 +194,16 @@ def main():
             seen.add(key)
             new_items.append((b, kind))
 
+        # fill only new rects
         fill_layer = render_fill_layer(W, H, new_items, gen_folder=gen_folder)
         acc_fill.alpha_composite(fill_layer)
 
-        # overlay drawn fresh each tick (always crisp)
-        overlay = render_outline_layer(W, H, items, w_box=6, w_inter=14)
+        # persist outlines for new rects
+        draw_outlines_in_place(acc_lines, new_items, w_box=6, w_inter=14)
 
+        # output: fills + all past outlines
         out = acc_fill.copy()
-        out.alpha_composite(overlay)
+        out.alpha_composite(acc_lines)
         out.save(out_path)
 
         time.sleep(10.0)
