@@ -118,61 +118,35 @@ def load_random_fill_image(gen_folder: str) -> Image.Image | None:
     except Exception:
         return None
 
-def render_fill_layer(
-    W: int,
-    H: int,
-    items: List[Tuple[Box, str]],
-    gen_folder: str,
-    tile_alpha_box: int = 140,
-    tile_alpha_intersect: int = 220,  # intersections read stronger
-) -> Image.Image:
+def render_fill_layer(W, H, items, gen_folder):
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
 
     for b, kind in items:
         if b.area == 0:
             continue
-
         src = load_random_fill_image(gen_folder)
         if src is None:
             continue
-
         tile = center_crop_to_aspect(src.convert("RGBA"), b.w, b.h)
-
-        target_alpha = tile_alpha_intersect if kind == "intersect" else tile_alpha_box
-        r, g, bl, a = tile.split()
-        a = a.point(lambda _: target_alpha)
-        tile = Image.merge("RGBA", (r, g, bl, a))
-
         layer.alpha_composite(tile, dest=(b.x1, b.y1))
 
     return layer
 
 
-def render_outline_layer(
-    W: int,
-    H: int,
-    items: List[Tuple[Box, str]],
-    outline_width_box: int = 6,
-    outline_width_intersect: int = 10,
-) -> Image.Image:
+def render_outline_layer(W, H, items, w_box=6, w_inter=12):
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
-
     for b, kind in items:
         if b.area == 0:
             continue
-
-        width = outline_width_intersect if kind == "intersect" else outline_width_box
-        color = (0, 255, 0, 255)  # fully opaque bright green
-
-        draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=color, width=width)
-
+        width = w_inter if kind == "intersect" else w_box
+        draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=(0,255,0,255), width=width)
     return layer
 
 
 def main():
     gen_folder = "/Users/j_laptop/mementomori/gen_images"
-    out_path = "/Users/j_laptop/mementomori/accumulated.png"  # single file
+    out_path = "/Users/j_laptop/mementomori/accumulated.png"
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -181,19 +155,20 @@ def main():
     model = torch.hub.load("ultralytics/yolov5", "yolov5s")
     model.eval()
 
-    acc = None
-    seen = set()  # comment out if you want to repaint every tick
+    acc_fill = None
+    seen = set()
 
     while True:
         ok, frame = cap.read()
         if not ok:
-            time.sleep(0.5)
+            time.sleep(0.2)
             continue
 
         H, W, _ = frame.shape
 
-        if acc is None:
-            acc = Image.new("RGBA", (W, H), (0, 0, 0, 255))  # use (0,0,0,0) for transparent start
+        if acc_fill is None or acc_fill.size != (W, H):
+            acc_fill = Image.new("RGBA", (W, H), (0, 0, 0, 255))
+            seen = set()  # reset if resolution changes
 
         results = model(frame)
         persons = results.xyxy[0].cpu().numpy()
@@ -201,7 +176,7 @@ def main():
         boxes = boxes_from_yolo(persons, W, H, conf_thresh=0.25, q=8)
         items = add_pairwise_intersections(boxes, min_area=800)
 
-        # 1) fill only new rects (both box + intersect)
+        # fill only new rects (including new intersection rects)
         new_items = []
         for b, kind in items:
             key = (b.x1, b.y1, b.x2, b.y2, kind)
@@ -211,17 +186,17 @@ def main():
             new_items.append((b, kind))
 
         fill_layer = render_fill_layer(W, H, new_items, gen_folder=gen_folder)
+        acc_fill.alpha_composite(fill_layer)
 
-        # 2) outlines for current intersections every tick (always bright, always on top)
-        current_intersections = [(b, kind) for (b, kind) in items if kind == "intersect"]
-        outline_layer = render_outline_layer(W, H, current_intersections)
+        # overlay drawn fresh each tick (always crisp)
+        overlay = render_outline_layer(W, H, items, w_box=6, w_inter=14)
 
-        acc.alpha_composite(fill_layer)
-        acc.alpha_composite(outline_layer)  # last write wins, keeps lines bright
-        acc.save(out_path)
-
+        out = acc_fill.copy()
+        out.alpha_composite(overlay)
+        out.save(out_path)
 
         time.sleep(10.0)
+
 
 
 if __name__ == "__main__":
