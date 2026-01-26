@@ -118,7 +118,15 @@ def load_random_fill_image(gen_folder: str) -> Image.Image | None:
     except Exception:
         return None
 
-def render_layer(W: int, H: int, items: List[Tuple[Box, str]], gen_folder: str) -> Image.Image:
+def render_layer(
+    W: int,
+    H: int,
+    items: List[Tuple[Box, str]],
+    gen_folder: str,
+    tile_alpha: int = 140,        # 0–255, lower = more translucent
+    outline_width_box: int = 6,
+    outline_width_intersect: int = 8,
+):
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
 
@@ -131,10 +139,24 @@ def render_layer(W: int, H: int, items: List[Tuple[Box, str]], gen_folder: str) 
             continue
 
         tile = center_crop_to_aspect(src, b.w, b.h)
+
+        # force translucency
+        if tile.mode != "RGBA":
+            tile = tile.convert("RGBA")
+
+        r, g, bl, a = tile.split()
+        a = a.point(lambda _: tile_alpha)
+        tile = Image.merge("RGBA", (r, g, bl, a))
+
         layer.alpha_composite(tile, dest=(b.x1, b.y1))
 
-        outline_w = 2 if kind == "box" else 3
-        draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline="black", width=outline_w)
+        # opaque bright green outline
+        width = outline_width_intersect if kind == "intersect" else outline_width_box
+        draw.rectangle(
+            [b.x1, b.y1, b.x2, b.y2],
+            outline=(0, 255, 0, 255),
+            width=width,
+        )
 
     return layer
 
