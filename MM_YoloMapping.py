@@ -70,10 +70,7 @@ def boxes_from_yolo(persons, W: int, H: int, conf_thresh: float = 0.25, q: int =
         out.append(b)
     return out
 
-def add_pairwise_intersections(boxes: List[Box], min_area: int = 400) -> List[Tuple[Box, str]]:
-    """
-    Returns list of (box, kind) where kind is "box" or "intersect".
-    """
+def add_pairwise_intersections(boxes: List[Box], min_area: int = 200) -> List[Tuple[Box, str]]:
     items: List[Tuple[Box, str]] = [(b, "box") for b in boxes]
     seen = set(boxes)
 
@@ -87,7 +84,6 @@ def add_pairwise_intersections(boxes: List[Box], min_area: int = 400) -> List[Tu
                 continue
             seen.add(inter)
             items.append((inter, "intersect"))
-
     return items
 
 def center_crop_to_aspect(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
@@ -194,15 +190,20 @@ def main():
         persons = results.xyxy[0].cpu().numpy()
 
         boxes = boxes_from_yolo(persons, W, H, conf_thresh=0.25, q=24)
-        items = add_pairwise_intersections(boxes, min_area=800)
-
-                # candidates (do NOT add to seen yet)
+        items = add_pairwise_intersections(boxes, min_area=200)
+        
+        items.sort(key=lambda t: 0 if t[1] == "intersect" else 1)
+        # candidates (do NOT add to seen yet)
         candidates = []
         for b, kind in items:
             key = (b.x1, b.y1, b.x2, b.y2, kind)
             if key in seen:
                 continue
             candidates.append((b, kind))
+        
+        MAX_FILLS_PER_TICK = 25
+        candidates = candidates[:MAX_FILLS_PER_TICK]
+
 
         # fill candidates, returns (layer, filled_keys)
         fill_layer, filled_keys = render_fill_layer(W, H, candidates, gen_folder=gen_folder)
