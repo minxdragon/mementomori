@@ -3,6 +3,7 @@ import time
 import random
 from dataclasses import dataclass
 from typing import List, Tuple
+from collections import deque
 
 import cv2
 import torch
@@ -26,6 +27,9 @@ class Box:
     @property
     def area(self) -> int:
         return self.w * self.h
+    
+def geom_key(b: Box):
+    return (b.x1, b.y1, b.x2, b.y2)
 
 def clamp_box(b: Box, W: int, H: int) -> Box:
     x1 = max(0, min(b.x1, W - 1))
@@ -104,6 +108,9 @@ def center_crop_to_aspect(img: Image.Image, target_w: int, target_h: int) -> Ima
 
     return img.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
+_cached_src = None
+_cached_mtime = None
+
 def load_random_fill_image(gen_folder: str) -> Image.Image | None:
     exts = (".png", ".jpg", ".jpeg", ".webp")
     files = [f for f in os.listdir(gen_folder) if f.lower().endswith(exts)]
@@ -114,6 +121,29 @@ def load_random_fill_image(gen_folder: str) -> Image.Image | None:
         return Image.open(path).convert("RGBA")
     except Exception:
         return None
+
+def load_latest_fill_image(gen_folder: str) -> Image.Image | None:
+    global _cached_src, _cached_mtime
+    exts = (".png", ".jpg", ".jpeg", ".webp")
+    paths = [
+        os.path.join(gen_folder, f)
+        for f in os.listdir(gen_folder)
+        if f.lower().endswith(exts)
+    ]
+    if not paths:
+        return _cached_src  # reuse whatever we had
+
+    newest = max(paths, key=lambda p: os.path.getmtime(p))
+    mtime = os.path.getmtime(newest)
+
+    if _cached_src is None or _cached_mtime != mtime:
+        try:
+            _cached_src = Image.open(newest).convert("RGBA")
+            _cached_mtime = mtime
+        except Exception:
+            pass
+
+    return _cached_src
 
 def render_fill_layer(W, H, items, gen_folder):
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -146,17 +176,27 @@ def render_outline_layer(W, H, items, w_box=6, w_inter=12):
         draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=(0,255,0,255), width=width)
     return layer
 
-def draw_outlines_in_place(img: Image.Image, items: List[Tuple[Box, str]], w_box=6, w_inter=14):
+def draw_outlines_in_place(img: Image.Image, items: List[Tuple[Box, str]], w_box=3, w_inter=5, alpha=220):
     draw = ImageDraw.Draw(img)
     for b, kind in items:
         if b.area == 0:
             continue
         width = w_inter if kind == "intersect" else w_box
+        draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=(0, 255, 0, alpha), width=width)
 
-        # black under-stroke
-        draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=(0, 0, 0, 255), width=width + 2)
-        # green stroke
-        draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=(0, 255, 0, 255), width=width)
+
+def add_history_intersections(
+    new_boxes: List[Box],
+    history: List[Box],
+    min_area: int = 200
+) -> List[Box]:
+    inters: List[Box] = []
+    for nb in new_boxes:
+        for hb in history:
+            inter = intersection(nb, hb)
+            if inter.area >= min_area:
+                inters.append(inter)
+    return inters
 
 def main():
     gen_folder = "/Users/j_laptop/mementomori/gen_images"
@@ -173,6 +213,26 @@ def main():
     acc_lines = None
     seen = set()
 
+    history_boxes: List[Box] = []
+    MAX_FILLS_PER_TICK = 12          # slow, readable
+    MAX_HISTORY = 300                # cap rectangles stored
+    INTER_MIN_AREA = 600             # lower = more intersections
+    SLEEP_S = 4.0
+
+    pending = deque()                # (Box, kind)
+    known = set()                    # geom keys discovered
+    filled = set()                   # geom keys already filled
+    history = []                     # List[Tuple[Box, kind]] for outline + intersection closure
+
+    def push_rect(b: Box, kind: str):
+        k = (b.x1, b.y1, b.x2, b.y2)
+        if k in known:
+            return
+        if b.area < INTER_MIN_AREA and kind == "intersect":
+            return
+        known.add(k)
+        pending.append((b, kind))
+
     while True:
         ok, frame = cap.read()
         if not ok:
@@ -184,46 +244,66 @@ def main():
         if acc_fill is None or acc_fill.size != (W, H):
             acc_fill = Image.new("RGBA", (W, H), (0, 0, 0, 255))
             acc_lines = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            seen = set()
+            pending.clear()
+            known.clear()
+            filled.clear()
+            history.clear()
 
         results = model(frame)
         persons = results.xyxy[0].cpu().numpy()
 
-        boxes = boxes_from_yolo(persons, W, H, conf_thresh=0.25, q=24)
-        items = add_pairwise_intersections(boxes, min_area=200)
-        
-        items.sort(key=lambda t: 0 if t[1] == "intersect" else 1)
-        # candidates (do NOT add to seen yet)
-        candidates = []
-        for b, kind in items:
-            key = (b.x1, b.y1, b.x2, b.y2, kind)
-            if key in seen:
+        # 1) add any new YOLO boxes to pending
+        boxes_now = boxes_from_yolo(persons, W, H, conf_thresh=0.25, q=24)
+        for b in boxes_now:
+            push_rect(b, "box")
+
+        # 2) take a few pending rects and fill them
+        to_fill = []
+        while pending and len(to_fill) < MAX_FILLS_PER_TICK:
+            b, kind = pending.popleft()
+            k = (b.x1, b.y1, b.x2, b.y2)
+            if k in filled:
                 continue
-            candidates.append((b, kind))
-        
-        MAX_FILLS_PER_TICK = 25
-        candidates = candidates[:MAX_FILLS_PER_TICK]
+            to_fill.append((b, kind))
 
-
-        # fill candidates, returns (layer, filled_keys)
-        fill_layer, filled_keys = render_fill_layer(W, H, candidates, gen_folder=gen_folder)
+        fill_layer, filled_keys = render_fill_layer(W, H, to_fill, gen_folder=gen_folder)
         acc_fill.alpha_composite(fill_layer)
 
-        # mark only successfully filled rects as seen
-        for key in filled_keys:
-            seen.add(key)
+        # 3) for each newly filled rect:
+        #    - mark filled
+        #    - draw its outline permanently
+        #    - generate NEW intersections with all existing history rects (closure)
+        new_for_lines = []
+        for (x1, y1, x2, y2, kind) in filled_keys:
+            b = Box(x1, y1, x2, y2)
+            k = (x1, y1, x2, y2)
 
-        # persist outlines only for successfully filled rects
-        new_for_lines = [(Box(x1, y1, x2, y2), kind) for (x1, y1, x2, y2, kind) in filled_keys]
-        draw_outlines_in_place(acc_lines, new_for_lines, w_box=6, w_inter=14)
+            filled.add(k)
+            new_for_lines.append((b, kind))
 
-        # output: fills + all past outlines
+            # intersections with everything already accepted (boxes + intersections)
+            for hb, _hk in history:
+                inter = intersection(b, hb)
+                if inter.area > 0:
+                    push_rect(inter, "intersect")
+
+            history.append((b, kind))
+
+        # cap history for speed
+        if len(history) > MAX_HISTORY:
+            history[:] = history[-MAX_HISTORY:]
+
+        # outlines persist
+        draw_outlines_in_place(acc_lines, new_for_lines, w_box=3, w_inter=5)
+
         out = acc_fill.copy()
         out.alpha_composite(acc_lines)
         out.save(out_path)
-        print("boxes", len(boxes), "items", len(items), "candidates", len(candidates), "filled", len(filled_keys))
 
-        time.sleep(10.0)
+        print("boxes_now", len(boxes_now), "pending", len(pending), "filled_this_tick", len(filled_keys), "history", len(history))
+
+        time.sleep(SLEEP_S)
+
 
 
 
