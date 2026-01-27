@@ -58,6 +58,26 @@ def intersection(a: Box, b: Box) -> Box:
         return Box(0, 0, 0, 0)
     return Box(x1, y1, x2, y2)
 
+def cell_key(x1, y1, x2, y2):
+    return (x1, y1, x2, y2)
+
+def rect_contains_cell(r: Box, x1, y1, x2, y2) -> bool:
+    return (r.x1 <= x1 and r.y1 <= y1 and r.x2 >= x2 and r.y2 >= y2)
+
+def build_cells(xs, ys):
+    xs = sorted(xs)
+    ys = sorted(ys)
+    for i in range(len(xs) - 1):
+        x1, x2 = xs[i], xs[i + 1]
+        if x2 <= x1:
+            continue
+        for j in range(len(ys) - 1):
+            y1, y2 = ys[j], ys[j + 1]
+            if y2 <= y1:
+                continue
+            yield (x1, y1, x2, y2)
+
+
 def boxes_from_yolo(persons, W: int, H: int, conf_thresh: float = 0.25, q: int = 8) -> List[Box]:
     out: List[Box] = []
     for det in persons:
@@ -184,6 +204,40 @@ def draw_outlines_in_place(img: Image.Image, items: List[Tuple[Box, str]], w_box
         width = w_inter if kind == "intersect" else w_box
         draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=(0, 255, 0, alpha), width=width)
 
+def pick_edge_pair(vals, min_span):
+    """
+    Pick two distinct edges from vals (sorted list), not necessarily adjacent.
+    Biased toward shorter spans but still allows long spans.
+    Returns (a, b) with b > a, or None.
+    """
+    if len(vals) < 2:
+        return None
+    n = len(vals)
+
+    i = random.randrange(0, n - 1)
+
+    # geometric-ish bias: small jumps common, big jumps rare
+    jump = 1
+    while i + jump < n and random.random() < 0.65:
+        jump += 1
+    j = min(n - 1, i + jump)
+
+    a, b = vals[i], vals[j]
+    if (b - a) < min_span:
+        # try a few bigger jumps
+        for _ in range(8):
+            j = random.randrange(i + 1, n)
+            a, b = vals[i], vals[j]
+            if (b - a) >= min_span:
+                break
+        if (b - a) < min_span:
+            return None
+    return a, b
+
+def jitter_edge(v, jitter_px, lo, hi):
+    if jitter_px <= 0:
+        return v
+    return max(lo, min(hi, v + random.randint(-jitter_px, jitter_px)))
 
 def add_history_intersections(
     new_boxes: List[Box],
@@ -211,27 +265,34 @@ def main():
 
     acc_fill = None
     acc_lines = None
-    seen = set()
 
-    history_boxes: List[Box] = []
-    MAX_FILLS_PER_TICK = 12          # slow, readable
-    MAX_HISTORY = 300                # cap rectangles stored
-    INTER_MIN_AREA = 600             # lower = more intersections
+    # arrangement state
+    accepted_rects: List[Box] = []
+    known_rects = set()          # geom_key(Box)
+    xs, ys = set(), set()
+    filled_cells = set()         # cell_key(x1,y1,x2,y2)
+
+    # tuning
+    Q = 24
+    CONF = 0.25
     SLEEP_S = 4.0
+    MAX_CELL_FILLS_PER_TICK = 14
+    CELL_MIN_W = 40
+    CELL_MIN_H = 40
 
-    pending = deque()                # (Box, kind)
-    known = set()                    # geom keys discovered
-    filled = set()                   # geom keys already filled
-    history = []                     # List[Tuple[Box, kind]] for outline + intersection closure
+    # keep things bounded
+    MAX_ACCEPTED_RECTS = 400     # affects cell count; raise carefully
+    MAX_EDGES = 250              # caps xs and ys sizes
 
-    def push_rect(b: Box, kind: str):
-        k = (b.x1, b.y1, b.x2, b.y2)
-        if k in known:
-            return
-        if b.area < INTER_MIN_AREA and kind == "intersect":
-            return
-        known.add(k)
-        pending.append((b, kind))
+    def accept_rect(b: Box):
+        k = geom_key(b)
+        if k in known_rects:
+            return False
+        known_rects.add(k)
+        accepted_rects.append(b)
+        xs.update([b.x1, b.x2])
+        ys.update([b.y1, b.y2])
+        return True
 
     while True:
         ok, frame = cap.read()
@@ -244,65 +305,88 @@ def main():
         if acc_fill is None or acc_fill.size != (W, H):
             acc_fill = Image.new("RGBA", (W, H), (0, 0, 0, 255))
             acc_lines = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            pending.clear()
-            known.clear()
-            filled.clear()
-            history.clear()
+            accepted_rects.clear()
+            known_rects.clear()
+            xs.clear()
+            ys.clear()
+            filled_cells.clear()
 
         results = model(frame)
         persons = results.xyxy[0].cpu().numpy()
 
-        # 1) add any new YOLO boxes to pending
-        boxes_now = boxes_from_yolo(persons, W, H, conf_thresh=0.25, q=24)
+        # 1) accept new YOLO boxes (these define the arrangement)
+        boxes_now = boxes_from_yolo(persons, W, H, conf_thresh=CONF, q=Q)
+        new_accepts = 0
         for b in boxes_now:
-            push_rect(b, "box")
+            if accept_rect(b):
+                new_accepts += 1
 
-        # 2) take a few pending rects and fill them
-        to_fill = []
-        while pending and len(to_fill) < MAX_FILLS_PER_TICK:
-            b, kind = pending.popleft()
-            k = (b.x1, b.y1, b.x2, b.y2)
-            if k in filled:
+        # 2) bound accepted rects and edge sets for performance
+        if len(accepted_rects) > MAX_ACCEPTED_RECTS:
+            # drop oldest; rebuild edges and known set from remaining
+            accepted_rects[:] = accepted_rects[-MAX_ACCEPTED_RECTS:]
+            known_rects = set(geom_key(r) for r in accepted_rects)
+            xs = set()
+            ys = set()
+            for r in accepted_rects:
+                xs.update([r.x1, r.x2])
+                ys.update([r.y1, r.y2])
+
+        if len(xs) > MAX_EDGES:
+            xs = set(sorted(xs)[-MAX_EDGES:])
+        if len(ys) > MAX_EDGES:
+            ys = set(sorted(ys)[-MAX_EDGES:])
+
+        # 3) build candidate cells and fill a few new ones
+        to_fill: List[Tuple[Box, str]] = []
+        for (x1, y1, x2, y2) in build_cells(xs, ys):
+            if (x2 - x1) < CELL_MIN_W or (y2 - y1) < CELL_MIN_H:
                 continue
-            to_fill.append((b, kind))
+
+            ck = cell_key(x1, y1, x2, y2)
+            if ck in filled_cells:
+                continue
+
+            # coverage: cell must be inside at least one accepted rect
+            covered = False
+            for r in accepted_rects:
+                if rect_contains_cell(r, x1, y1, x2, y2):
+                    covered = True
+                    break
+            if not covered:
+                continue
+
+            to_fill.append((Box(x1, y1, x2, y2), "cell"))
+            if len(to_fill) >= MAX_CELL_FILLS_PER_TICK:
+                break
 
         fill_layer, filled_keys = render_fill_layer(W, H, to_fill, gen_folder=gen_folder)
         acc_fill.alpha_composite(fill_layer)
 
-        # 3) for each newly filled rect:
-        #    - mark filled
-        #    - draw its outline permanently
-        #    - generate NEW intersections with all existing history rects (closure)
-        new_for_lines = []
-        for (x1, y1, x2, y2, kind) in filled_keys:
-            b = Box(x1, y1, x2, y2)
-            k = (x1, y1, x2, y2)
+        # 4) persist outlines for newly filled cells
+        new_for_lines: List[Tuple[Box, str]] = []
+        for (x1, y1, x2, y2, _kind) in filled_keys:
+            filled_cells.add(cell_key(x1, y1, x2, y2))
+            new_for_lines.append((Box(x1, y1, x2, y2), "cell"))
 
-            filled.add(k)
-            new_for_lines.append((b, kind))
-
-            # intersections with everything already accepted (boxes + intersections)
-            for hb, _hk in history:
-                inter = intersection(b, hb)
-                if inter.area > 0:
-                    push_rect(inter, "intersect")
-
-            history.append((b, kind))
-
-        # cap history for speed
-        if len(history) > MAX_HISTORY:
-            history[:] = history[-MAX_HISTORY:]
-
-        # outlines persist
-        draw_outlines_in_place(acc_lines, new_for_lines, w_box=3, w_inter=5)
+        # thin outlines
+        draw_outlines_in_place(acc_lines, new_for_lines, w_box=2, w_inter=2, alpha=220)
 
         out = acc_fill.copy()
         out.alpha_composite(acc_lines)
         out.save(out_path)
 
-        print("boxes_now", len(boxes_now), "pending", len(pending), "filled_this_tick", len(filled_keys), "history", len(history))
+        print(
+            "yolo_boxes", len(boxes_now),
+            "new_accepts", new_accepts,
+            "accepted_rects", len(accepted_rects),
+            "edges", (len(xs), len(ys)),
+            "filled_cells_total", len(filled_cells),
+            "filled_this_tick", len(filled_keys),
+        )
 
         time.sleep(SLEEP_S)
+
 
 
 
