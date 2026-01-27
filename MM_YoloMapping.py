@@ -338,16 +338,45 @@ def main():
             ys = set(sorted(ys)[-MAX_EDGES:])
 
         # 3) build candidate cells and fill a few new ones
+        # 3) randomly sample cells (chaotic) instead of adjacent-grid cells
         to_fill: List[Tuple[Box, str]] = []
-        for (x1, y1, x2, y2) in build_cells(xs, ys):
-            if (x2 - x1) < CELL_MIN_W or (y2 - y1) < CELL_MIN_H:
+
+        xs_list = sorted(xs)
+        ys_list = sorted(ys)
+
+        ATTEMPTS_PER_TICK = 250          # raise if it struggles to find new cells
+        EDGE_JITTER_PX = 6               # 0 to disable; keep small so it still "snaps"
+        MIN_W = CELL_MIN_W
+        MIN_H = CELL_MIN_H
+
+        attempts = 0
+        while attempts < ATTEMPTS_PER_TICK and len(to_fill) < MAX_CELL_FILLS_PER_TICK:
+            attempts += 1
+
+            xp = pick_edge_pair(xs_list, MIN_W)
+            yp = pick_edge_pair(ys_list, MIN_H)
+            if xp is None or yp is None:
+                break
+
+            x1, x2 = xp
+            y1, y2 = yp
+
+            # optional jitter, then re-order
+            x1 = jitter_edge(x1, EDGE_JITTER_PX, 0, W - 2)
+            x2 = jitter_edge(x2, EDGE_JITTER_PX, 1, W - 1)
+            y1 = jitter_edge(y1, EDGE_JITTER_PX, 0, H - 2)
+            y2 = jitter_edge(y2, EDGE_JITTER_PX, 1, H - 1)
+
+            if x2 <= x1 or y2 <= y1:
+                continue
+            if (x2 - x1) < MIN_W or (y2 - y1) < MIN_H:
                 continue
 
             ck = cell_key(x1, y1, x2, y2)
             if ck in filled_cells:
                 continue
 
-            # coverage: cell must be inside at least one accepted rect
+            # coverage rule: cell must be inside at least one accepted rect
             covered = False
             for r in accepted_rects:
                 if rect_contains_cell(r, x1, y1, x2, y2):
@@ -357,6 +386,7 @@ def main():
                 continue
 
             to_fill.append((Box(x1, y1, x2, y2), "cell"))
+
             if len(to_fill) >= MAX_CELL_FILLS_PER_TICK:
                 break
 
