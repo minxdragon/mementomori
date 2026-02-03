@@ -10,3 +10,4 @@ Human-Segmentation-PyTorch
 PngToSvg
 *.svg
 Human-Segmentation-PyTorch
+yolov5s.pt
