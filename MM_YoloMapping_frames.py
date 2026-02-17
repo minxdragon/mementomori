@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import time
 import random
 from dataclasses import dataclass
@@ -253,8 +254,16 @@ def add_history_intersections(
     return inters
 
 def main():
-    gen_folder = "/Users/j_laptop/mementomori/gen_images"
-    out_path = "/Users/j_laptop/mementomori/accumulated.png"
+    base_dir = Path(os.path.expanduser("~/mementomori"))
+    gen_folder = str(base_dir / "gen_images")
+    Path(gen_folder).mkdir(parents=True, exist_ok=True)
+
+    # Frame outputs: numbered frames for animation + a stable "latest.png" for projection
+    output_dir = base_dir / "frames"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    latest_path = base_dir / "latest.png"
+
+    frame_idx = 0
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -401,10 +410,19 @@ def main():
 
         # thin outlines
         draw_outlines_in_place(acc_lines, new_for_lines, w_box=2, w_inter=2, alpha=220)
-
         out = acc_fill.copy()
         out.alpha_composite(acc_lines)
-        out.save(out_path)
+
+        # 5) save a unique frame for animation
+        frame_path = output_dir / f"frame_{frame_idx:06d}.png"
+        out.save(frame_path)
+
+        # 6) also update a stable filename for the projector (atomic replace)
+        tmp_latest = latest_path.with_suffix(".tmp.png")
+        out.save(tmp_latest)
+        os.replace(tmp_latest, latest_path)
+
+        frame_idx += 1
 
         print(
             "yolo_boxes", len(boxes_now),
