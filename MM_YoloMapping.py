@@ -441,6 +441,9 @@ def main():
         for (x1, y1, x2, y2, _kind) in filled_keys:
             filled_cells.add(cell_key(x1, y1, x2, y2))
             new_for_lines.append((Box(x1, y1, x2, y2), "cell"))
+        
+        #5) new boxes have a blue outline and fade out over time; intersections have a thicker outline and fade slower
+        draw_rectangles_neon_blue(acc_lines, [b for b, _ in new_for_lines], thickness=2, alpha=220)
 
         # thin outlines
         draw_outlines_in_place(acc_lines, new_for_lines, w_box=2, w_inter=2, alpha=220)

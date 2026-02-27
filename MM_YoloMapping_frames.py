@@ -5,7 +5,7 @@ import random
 from dataclasses import dataclass
 from typing import List, Tuple
 from collections import deque
-
+import numpy as np
 import cv2
 import torch
 from PIL import Image, ImageDraw
@@ -197,13 +197,66 @@ def render_outline_layer(W, H, items, w_box=6, w_inter=12):
         draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=(0,255,0,255), width=width)
     return layer
 
-def draw_outlines_in_place(img: Image.Image, items: List[Tuple[Box, str]], w_box=3, w_inter=5, alpha=220):
+def draw_outlines_in_place(img: Image.Image, items: List[Tuple[Box, str]],
+                           w_box=3, w_inter=5, alpha=220,
+                           color=(0, 255, 0)):  # RGB
     draw = ImageDraw.Draw(img)
     for b, kind in items:
         if b.area == 0:
             continue
         width = w_inter if kind == "intersect" else w_box
-        draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=(0, 255, 0, alpha), width=width)
+        draw.rectangle(
+            [b.x1, b.y1, b.x2, b.y2],
+            outline=(color[0], color[1], color[2], alpha),
+            width=width
+        )
+
+def shift_existing_colors_toward_green(rgba_canvas: np.ndarray, step: int = 6) -> np.ndarray:
+    """
+    rgba_canvas: HxWx4 uint8, BGRA
+    step: how many color units to move per frame (bigger = faster shift)
+    """
+    NEON_PURPLE = np.array([255, 0, 0], dtype=np.uint8)  # BGRA order
+    if rgba_canvas.ndim != 3 or rgba_canvas.shape[2] != 4:
+        raise ValueError("Expected BGRA canvas (H x W x 4).")
+
+    out = rgba_canvas.copy()
+
+    bgr = out[:, :, :3].astype(np.int16)
+    a   = out[:, :, 3]
+
+    # Only affect pixels that are actually drawn (alpha > 0)
+    m = (a > 0)
+
+    # Move each channel toward target by +/- step (clamped)
+    NEON_GREEN = np.array([0, 255, 0], dtype=np.int16)  # BGR order
+    target = NEON_GREEN.astype(np.int16)
+    delta = target - bgr
+    bgr[m] = bgr[m] + np.clip(delta[m], -step, step)
+
+    out[:, :, :3] = np.clip(bgr, 0, 255).astype(np.uint8)
+    return out
+
+def draw_rectangles_neon_purple(rgba_canvas: np.ndarray, boxes_xyxy, thickness: int = 4, alpha: int = 255):
+    """
+    boxes_xyxy: iterable of (x1, y1, x2, y2) ints
+    rgba_canvas: BGRA (uint8) array.  The function will ensure the array is
+    contiguous, which OpenCV requires.
+    """
+    NEON_PURPLE = (255, 0, 0)  # BGRA order for OpenCV
+    # OpenCV needs a contiguous array of correct dtype
+    if not rgba_canvas.flags['C_CONTIGUOUS'] or rgba_canvas.dtype != np.uint8:
+        rgba_canvas = np.ascontiguousarray(rgba_canvas, dtype=np.uint8)
+
+    for (x1, y1, x2, y2) in boxes_xyxy:
+        cv2.rectangle(
+            rgba_canvas,
+            (int(x1), int(y1)),
+            (int(x2), int(y2)),
+            color=(int(NEON_PURPLE[0]), int(NEON_PURPLE[1]), int(draw_rectangles_neon_purple[2]), int(alpha)),
+            thickness=thickness,
+            lineType=cv2.LINE_AA
+        )
 
 def pick_edge_pair(vals, min_span):
     """
@@ -265,6 +318,10 @@ def main():
 
     frame_idx = 0
 
+    filled_boxes = set()       # geom_key(Box)
+    filled_inters = set()      # geom_key(Box)
+    MIN_INTER_AREA = 2000      # tune, pixels^2
+
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         raise RuntimeError("Could not open webcam")
@@ -280,7 +337,7 @@ def main():
     known_rects = set()          # geom_key(Box)
     xs, ys = set(), set()
     filled_cells = set()         # cell_key(x1,y1,x2,y2)
-
+    
     # tuning
     Q = 24
     CONF = 0.25
@@ -312,8 +369,9 @@ def main():
         H, W, _ = frame.shape
 
         if acc_fill is None or acc_fill.size != (W, H):
-            acc_fill = Image.new("RGBA", (W, H), (0, 0, 0, 255))
+            acc_fill  = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             acc_lines = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+
             accepted_rects.clear()
             known_rects.clear()
             xs.clear()
@@ -408,14 +466,38 @@ def main():
             filled_cells.add(cell_key(x1, y1, x2, y2))
             new_for_lines.append((Box(x1, y1, x2, y2), "cell"))
 
-        # thin outlines
-        draw_outlines_in_place(acc_lines, new_for_lines, w_box=2, w_inter=2, alpha=220)
-        out = acc_fill.copy()
-        out.alpha_composite(acc_lines)
+        # shift the existing outline canvas FIRST
+        arr = np.array(acc_lines)                     # RGBA
+        bgra = arr[..., [2, 1, 0, 3]]                 # -> BGRA
+        bgra = shift_existing_colors_toward_green(bgra, step=25)  # bump step so it is visible
+        shifted_rgba = bgra[..., [2, 1, 0, 3]]        # -> RGBA
+        acc_lines = Image.fromarray(shifted_rgba, mode="RGBA")
+
+        # now draw the NEW outlines in neon purple (RGB for PIL)
+        new_for_lines: List[Tuple[Box, str]] = []
+        for (x1, y1, x2, y2, _kind) in filled_keys:
+            filled_cells.add(cell_key(x1, y1, x2, y2))
+            new_for_lines.append((Box(x1, y1, x2, y2), "cell"))
+
+        draw_outlines_in_place(
+            acc_lines,
+            new_for_lines,
+            w_box=3,
+            w_inter=3,
+            alpha=255,
+            color=(140, 0, 255)  # neon purple in RGB
+        )
 
         # 5) save a unique frame for animation
         frame_path = output_dir / f"frame_{frame_idx:06d}.png"
+        H, W = frame.shape[:2]
+
+        # For saving (transparent background)
+        out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        out.alpha_composite(acc_fill)
+        out.alpha_composite(acc_lines)
         out.save(frame_path)
+
 
         # 6) also update a stable filename for the projector (atomic replace)
         tmp_latest = latest_path.with_suffix(".tmp.png")
