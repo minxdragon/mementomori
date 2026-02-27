@@ -139,7 +139,10 @@ def load_random_fill_image(gen_folder: str) -> Image.Image | None:
         return None
     path = os.path.join(gen_folder, random.choice(files))
     try:
-        return Image.open(path).convert("RGBA")
+        im = Image.open(path)
+        if im.mode in ("RGBA", "LA") or ("transparency" in im.info):
+            im = im.convert("RGB")          # drop alpha
+        return im.convert("RGBA")           # re-add opaque alpha
     except Exception:
         return None
 
@@ -179,9 +182,18 @@ def render_fill_layer(W, H, items, gen_folder):
             continue
 
         tile = center_crop_to_aspect(src.convert("RGBA"), b.w, b.h)
+        tile = center_crop_to_aspect(src.convert("RGBA"), b.w, b.h)
+
+        # If tile is fully transparent, skip it and try another source next loop
+        if tile.getbbox() is None:
+            continue
+
+        # Force opaque alpha so fills never disappear
+        tile.putalpha(255)
         layer.alpha_composite(tile, dest=(b.x1, b.y1))
 
         filled_keys.append((b.x1, b.y1, b.x2, b.y2, kind))
+        print("tile bbox", tile.getbbox(), "src", getattr(src, "mode", None))
 
     return layer, filled_keys
 
@@ -387,7 +399,31 @@ def main():
         for b in boxes_now:
             if accept_rect(b):
                 new_accepts += 1
+        to_fill: list[tuple[Box, str]] = []
 
+        # A) fill every accepted YOLO box that has not yet been filled
+        for b in accepted_rects:
+            k = geom_key(b)
+            if k not in filled_boxes:
+                filled_boxes.add(k)
+                to_fill.append((b, "box"))
+
+        # B) fill each intersection once (between any two boxes)
+        # Use the full history so intersections with older boxes also get filled when a new one arrives.
+        all_boxes = list(accepted_rects)
+
+        n = len(all_boxes)
+        for i in range(n):
+            for j in range(i + 1, n):
+                inter = intersection(all_boxes[i], all_boxes[j])
+                if inter.area < MIN_INTER_AREA:
+                    continue
+                ik = geom_key(inter)
+                if ik in filled_inters:
+                    continue
+                filled_inters.add(ik)
+                to_fill.append((inter, "intersect"))
+                
         # 2) bound accepted rects and edge sets for performance
         if len(accepted_rects) > MAX_ACCEPTED_RECTS:
             # drop oldest; rebuild edges and known set from remaining
@@ -404,6 +440,8 @@ def main():
         if len(ys) > MAX_EDGES:
             ys = set(sorted(ys)[-MAX_EDGES:])
 
+            
+
         # 3) build candidate cells and fill a few new ones
         # 3) randomly sample cells (chaotic) instead of adjacent-grid cells
         to_fill: List[Tuple[Box, str]] = []
@@ -417,6 +455,28 @@ def main():
         MIN_H = CELL_MIN_H
 
         attempts = 0
+        fill_layer0, filled_keys0 = render_fill_layer(W, H, to_fill, gen_folder=gen_folder)
+        acc_fill.alpha_composite(fill_layer0)
+
+        new_boxes = list(boxes_now)
+        all_boxes = list(accepted_rects)
+
+        for nb in new_boxes:
+            for hb in all_boxes:
+                if hb == nb:
+                    continue
+                inter = intersection(nb, hb)
+                if inter.area < MIN_INTER_AREA:
+                    continue
+                ik = geom_key(inter)
+                if ik in filled_inters:
+                    continue
+                filled_inters.add(ik)
+                to_fill.append((inter, "intersect"))
+                
+        # outlines for those new regions
+        new_for_lines = [(Box(x1, y1, x2, y2), kind) for (x1, y1, x2, y2, kind) in filled_keys0]
+
         while attempts < ATTEMPTS_PER_TICK and len(to_fill) < MAX_CELL_FILLS_PER_TICK:
             attempts += 1
 
@@ -459,6 +519,22 @@ def main():
 
         fill_layer, filled_keys = render_fill_layer(W, H, to_fill, gen_folder=gen_folder)
         acc_fill.alpha_composite(fill_layer)
+        # shift once per tick
+
+        arr = np.array(acc_lines)                 
+        bgra = arr[..., [2, 1, 0, 3]]
+        bgra = shift_existing_colors_toward_green(bgra, step=25)
+        acc_lines = Image.fromarray(bgra[..., [2, 1, 0, 3]], mode="RGBA")
+
+        # draw new outlines in purple
+        draw_outlines_in_place(
+            acc_lines,
+            new_for_lines,
+            w_box=3,
+            w_inter=5,
+            alpha=255,
+            color=(140, 0, 255)
+        )
 
         # 4) persist outlines for newly filled cells
         new_for_lines: List[Tuple[Box, str]] = []
