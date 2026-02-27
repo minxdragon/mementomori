@@ -184,7 +184,50 @@ def render_fill_layer(W, H, items, gen_folder):
 
     return layer, filled_keys
 
+import cv2
+import numpy as np
 
+NEON_BLUE  = np.array([255,   0, 140], dtype=np.uint8)  # B, G, R
+NEON_GREEN = np.array([  0, 255, 120], dtype=np.uint8)  # B, G, R
+
+def shift_existing_colors_toward_green(rgba_canvas: np.ndarray, step: int = 6) -> np.ndarray:
+    """
+    rgba_canvas: HxWx4 uint8, BGRA
+    step: how many color units to move per frame (bigger = faster shift)
+    """
+    if rgba_canvas.ndim != 3 or rgba_canvas.shape[2] != 4:
+        raise ValueError("Expected BGRA canvas (H x W x 4).")
+
+    out = rgba_canvas.copy()
+
+    bgr = out[:, :, :3].astype(np.int16)
+    a   = out[:, :, 3]
+
+    # Only affect pixels that are actually drawn (alpha > 0)
+    m = (a > 0)
+
+    # Move each channel toward target by +/- step (clamped)
+    target = NEON_GREEN.astype(np.int16)
+    delta = target - bgr
+    bgr[m] = bgr[m] + np.clip(delta[m], -step, step)
+
+    out[:, :, :3] = np.clip(bgr, 0, 255).astype(np.uint8)
+    return out
+
+def draw_rectangles_neon_blue(rgba_canvas: np.ndarray, boxes_xyxy, thickness: int = 4, alpha: int = 255):
+    """
+    boxes_xyxy: iterable of (x1, y1, x2, y2) ints
+    rgba_canvas: BGRA
+    """
+    for (x1, y1, x2, y2) in boxes_xyxy:
+        cv2.rectangle(
+            rgba_canvas,
+            (int(x1), int(y1)),
+            (int(x2), int(y2)),
+            color=(int(NEON_BLUE[0]), int(NEON_BLUE[1]), int(NEON_BLUE[2]), int(alpha)),
+            thickness=thickness,
+            lineType=cv2.LINE_AA
+        )
 
 def render_outline_layer(W, H, items, w_box=6, w_inter=12):
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
