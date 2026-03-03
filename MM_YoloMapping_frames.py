@@ -8,7 +8,7 @@ from collections import deque
 import numpy as np
 import cv2
 import torch
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageChops
 
 @dataclass(frozen=True)
 class Box:
@@ -342,6 +342,7 @@ def main():
 
     acc_fill = None
     acc_lines = None
+    acc_protect = None  # L mask: 255 = protected (intersections)
 
     # arrangement state
     accepted_rects: List[Box] = []
@@ -353,9 +354,9 @@ def main():
     Q = 24
     CONF = 0.25
     SLEEP_S = 4.0
-    MAX_CELL_FILLS_PER_TICK = 14
-    CELL_MIN_W = 40
-    CELL_MIN_H = 40
+    MAX_CELL_FILLS_PER_TICK = 60
+    CELL_MIN_W = 12
+    CELL_MIN_H = 12
 
     # keep things bounded
     MAX_ACCEPTED_RECTS = 400     # affects cell count; raise carefully
@@ -382,6 +383,7 @@ def main():
         if acc_fill is None or acc_fill.size != (W, H):
             acc_fill  = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             acc_lines = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            acc_protect = Image.new("L", (W, H), 0)
 
             accepted_rects.clear()
             known_rects.clear()
@@ -401,12 +403,9 @@ def main():
         # 3) build fill list
         to_fill: List[Tuple[Box, str]] = []
 
-        # A) fill every accepted YOLO box that has not yet been filled
-        for b in accepted_rects:
-            k = geom_key(b)
-            if k not in filled_boxes:
-                filled_boxes.add(k)
-                to_fill.append((b, "box"))
+        # A) live overlay: fill current YOLO boxes every tick
+        for b in boxes_now:
+            to_fill.append((b, "box"))
 
         # B) fill intersections involving new boxes
         for nb in boxes_now:
@@ -422,40 +421,74 @@ def main():
                 filled_inters.add(ik)
                 to_fill.append((inter, "intersect"))
 
-        # C) (optional) keep your cell fills if you want them
-        # If you want ONLY boxes + intersections, remove the whole cell loop.
-        #         # C) fill every closed cell (grid cell between any adjacent x/y edges)
-        xs_list = sorted(xs)[:MAX_EDGES]
-        ys_list = sorted(ys)[:MAX_EDGES]
+        # # C) fill closed cells, but only inside each accepted YOLO rect
+        # def cap_local_edges(vals, cap_n):
+        #     vals = sorted(set(vals))
+        #     if len(vals) <= cap_n:
+        #         return vals
+        #     # keep first/last, sample middle evenly
+        #     mid = vals[1:-1]
+        #     k = cap_n - 2
+        #     if k <= 0:
+        #         return [vals[0], vals[-1]]
+        #     idx = np.linspace(0, len(mid) - 1, k).round().astype(int)
+        #     return [vals[0]] + [mid[i] for i in idx] + [vals[-1]]
 
-        cell_fills = 0
-        for (x1, y1, x2, y2) in build_cells(xs_list, ys_list):
-            if cell_fills >= MAX_CELL_FILLS_PER_TICK:
-                break
-            if (x2 - x1) < CELL_MIN_W or (y2 - y1) < CELL_MIN_H:
-                continue
+        # cell_fills = 0
 
-            ck = cell_key(x1, y1, x2, y2)
-            if ck in filled_cells:
-                continue
+        # # small boxes first, so you don't immediately “wash” a giant rect
+        # for r in sorted(accepted_rects, key=lambda b: b.area):
+        #     if cell_fills >= MAX_CELL_FILLS_PER_TICK:
+        #         break
 
-            # If you want to restrict cells to areas covered by at least one YOLO box, keep this.
-            # If you want the entire grid filled regardless, delete this 'if' block.
-            if not any(rect_contains_cell(r, x1, y1, x2, y2) for r in accepted_rects):
-                continue
+        #     # edges that lie inside this rect, plus the rect borders
+        #     xs_in = [r.x1, r.x2] + [x for x in xs if r.x1 < x < r.x2]
+        #     ys_in = [r.y1, r.y2] + [y for y in ys if r.y1 < y < r.y2]
 
-            filled_cells.add(ck)
-            to_fill.append((Box(x1, y1, x2, y2), "cell"))
-            cell_fills += 1
+        #     xs_in = cap_local_edges(xs_in, MAX_EDGES)
+        #     ys_in = cap_local_edges(ys_in, MAX_EDGES)
 
-        # 4) render fills once, composite once
-        fill_layer, filled_keys = render_fill_layer(W, H, to_fill, gen_folder=gen_folder)
-        acc_fill.alpha_composite(fill_layer)
+        #     for (x1, y1, x2, y2) in build_cells(xs_in, ys_in):
+        #         if cell_fills >= MAX_CELL_FILLS_PER_TICK:
+        #             break
+        #         if (x2 - x1) < CELL_MIN_W or (y2 - y1) < CELL_MIN_H:
+        #             continue
 
-        # mark cells as filled (only for cell items)
-        for (x1, y1, x2, y2, kind) in filled_keys:
-            if kind == "cell":
-                filled_cells.add(cell_key(x1, y1, x2, y2))
+        #         ck = cell_key(x1, y1, x2, y2)
+        #         if ck in filled_cells:
+        #             continue
+
+        #         filled_cells.add(ck)
+        #         to_fill.append((Box(x1, y1, x2, y2), "cell"))
+        #         cell_fills += 1
+
+               # 4) render intersections first, then boxes (boxes cannot overwrite protected pixels)
+        inter_items = [(b, k) for (b, k) in to_fill if k == "intersect"]
+        box_items   = [(b, k) for (b, k) in to_fill if k == "box"]
+
+        filled_keys = []
+
+        # 4a) intersections: stamp once, then protect those pixels forever
+        if inter_items:
+            inter_layer, inter_keys = render_fill_layer(W, H, inter_items, gen_folder=gen_folder)
+            acc_fill.alpha_composite(inter_layer)
+            filled_keys.extend(inter_keys)
+
+            pm = ImageDraw.Draw(acc_protect)
+            for (x1, y1, x2, y2, kind) in inter_keys:
+                pm.rectangle([x1, y1, x2, y2], fill=255)
+
+        # 4b) boxes: live overlay, but do not overwrite protected pixels (intersections)
+        if box_items:
+            box_layer, box_keys = render_fill_layer(W, H, box_items, gen_folder=gen_folder)
+
+            inv = ImageChops.invert(acc_protect)  # 255 where NOT protected
+            r, g, b, a = box_layer.split()
+            a = ImageChops.multiply(a, inv)       # zero alpha where protected
+            box_layer = Image.merge("RGBA", (r, g, b, a))
+
+            acc_fill.alpha_composite(box_layer)
+            filled_keys.extend(box_keys)
 
         # 5) shift outlines once per tick
         arr = np.array(acc_lines)
@@ -477,8 +510,8 @@ def main():
         # 5) save a unique frame for animation
         frame_path = output_dir / f"frame_{frame_idx:06d}.png"
         H, W = frame.shape[:2]
-        xs.update([0, W])
-        ys.update([0, H])
+        # xs.update([0, W])
+        # ys.update([0, H])
 
         # For saving (transparent background)
         out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
