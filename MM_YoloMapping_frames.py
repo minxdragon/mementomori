@@ -182,7 +182,6 @@ def render_fill_layer(W, H, items, gen_folder):
             continue
 
         tile = center_crop_to_aspect(src.convert("RGBA"), b.w, b.h)
-        tile = center_crop_to_aspect(src.convert("RGBA"), b.w, b.h)
 
         # If tile is fully transparent, skip it and try another source next loop
         if tile.getbbox() is None:
@@ -399,7 +398,8 @@ def main():
         for b in boxes_now:
             if accept_rect(b):
                 new_accepts += 1
-        to_fill: list[tuple[Box, str]] = []
+        # 3) build fill list
+        to_fill: List[Tuple[Box, str]] = []
 
         # A) fill every accepted YOLO box that has not yet been filled
         for b in accepted_rects:
@@ -408,61 +408,9 @@ def main():
                 filled_boxes.add(k)
                 to_fill.append((b, "box"))
 
-        # B) fill each intersection once (between any two boxes)
-        # Use the full history so intersections with older boxes also get filled when a new one arrives.
-        all_boxes = list(accepted_rects)
-
-        n = len(all_boxes)
-        for i in range(n):
-            for j in range(i + 1, n):
-                inter = intersection(all_boxes[i], all_boxes[j])
-                if inter.area < MIN_INTER_AREA:
-                    continue
-                ik = geom_key(inter)
-                if ik in filled_inters:
-                    continue
-                filled_inters.add(ik)
-                to_fill.append((inter, "intersect"))
-                
-        # 2) bound accepted rects and edge sets for performance
-        if len(accepted_rects) > MAX_ACCEPTED_RECTS:
-            # drop oldest; rebuild edges and known set from remaining
-            accepted_rects[:] = accepted_rects[-MAX_ACCEPTED_RECTS:]
-            known_rects = set(geom_key(r) for r in accepted_rects)
-            xs = set()
-            ys = set()
-            for r in accepted_rects:
-                xs.update([r.x1, r.x2])
-                ys.update([r.y1, r.y2])
-
-        if len(xs) > MAX_EDGES:
-            xs = set(sorted(xs)[-MAX_EDGES:])
-        if len(ys) > MAX_EDGES:
-            ys = set(sorted(ys)[-MAX_EDGES:])
-
-            
-
-        # 3) build candidate cells and fill a few new ones
-        # 3) randomly sample cells (chaotic) instead of adjacent-grid cells
-        to_fill: List[Tuple[Box, str]] = []
-
-        xs_list = sorted(xs)
-        ys_list = sorted(ys)
-
-        ATTEMPTS_PER_TICK = 250          # raise if it struggles to find new cells
-        EDGE_JITTER_PX = 6               # 0 to disable; keep small so it still "snaps"
-        MIN_W = CELL_MIN_W
-        MIN_H = CELL_MIN_H
-
-        attempts = 0
-        fill_layer0, filled_keys0 = render_fill_layer(W, H, to_fill, gen_folder=gen_folder)
-        acc_fill.alpha_composite(fill_layer0)
-
-        new_boxes = list(boxes_now)
-        all_boxes = list(accepted_rects)
-
-        for nb in new_boxes:
-            for hb in all_boxes:
+        # B) fill intersections involving new boxes
+        for nb in boxes_now:
+            for hb in accepted_rects:
                 if hb == nb:
                     continue
                 inter = intersection(nb, hb)
@@ -473,60 +421,50 @@ def main():
                     continue
                 filled_inters.add(ik)
                 to_fill.append((inter, "intersect"))
-                
-        # outlines for those new regions
-        new_for_lines = [(Box(x1, y1, x2, y2), kind) for (x1, y1, x2, y2, kind) in filled_keys0]
 
-        while attempts < ATTEMPTS_PER_TICK and len(to_fill) < MAX_CELL_FILLS_PER_TICK:
-            attempts += 1
+        # C) (optional) keep your cell fills if you want them
+        # If you want ONLY boxes + intersections, remove the whole cell loop.
+        #         # C) fill every closed cell (grid cell between any adjacent x/y edges)
+        xs_list = sorted(xs)[:MAX_EDGES]
+        ys_list = sorted(ys)[:MAX_EDGES]
 
-            xp = pick_edge_pair(xs_list, MIN_W)
-            yp = pick_edge_pair(ys_list, MIN_H)
-            if xp is None or yp is None:
+        cell_fills = 0
+        for (x1, y1, x2, y2) in build_cells(xs_list, ys_list):
+            if cell_fills >= MAX_CELL_FILLS_PER_TICK:
                 break
-
-            x1, x2 = xp
-            y1, y2 = yp
-
-            # optional jitter, then re-order
-            x1 = jitter_edge(x1, EDGE_JITTER_PX, 0, W - 2)
-            x2 = jitter_edge(x2, EDGE_JITTER_PX, 1, W - 1)
-            y1 = jitter_edge(y1, EDGE_JITTER_PX, 0, H - 2)
-            y2 = jitter_edge(y2, EDGE_JITTER_PX, 1, H - 1)
-
-            if x2 <= x1 or y2 <= y1:
-                continue
-            if (x2 - x1) < MIN_W or (y2 - y1) < MIN_H:
+            if (x2 - x1) < CELL_MIN_W or (y2 - y1) < CELL_MIN_H:
                 continue
 
             ck = cell_key(x1, y1, x2, y2)
             if ck in filled_cells:
                 continue
 
-            # coverage rule: cell must be inside at least one accepted rect
-            covered = False
-            for r in accepted_rects:
-                if rect_contains_cell(r, x1, y1, x2, y2):
-                    covered = True
-                    break
-            if not covered:
+            # If you want to restrict cells to areas covered by at least one YOLO box, keep this.
+            # If you want the entire grid filled regardless, delete this 'if' block.
+            if not any(rect_contains_cell(r, x1, y1, x2, y2) for r in accepted_rects):
                 continue
 
+            filled_cells.add(ck)
             to_fill.append((Box(x1, y1, x2, y2), "cell"))
+            cell_fills += 1
 
-            if len(to_fill) >= MAX_CELL_FILLS_PER_TICK:
-                break
-
+        # 4) render fills once, composite once
         fill_layer, filled_keys = render_fill_layer(W, H, to_fill, gen_folder=gen_folder)
         acc_fill.alpha_composite(fill_layer)
-        # shift once per tick
 
-        arr = np.array(acc_lines)                 
+        # mark cells as filled (only for cell items)
+        for (x1, y1, x2, y2, kind) in filled_keys:
+            if kind == "cell":
+                filled_cells.add(cell_key(x1, y1, x2, y2))
+
+        # 5) shift outlines once per tick
+        arr = np.array(acc_lines)
         bgra = arr[..., [2, 1, 0, 3]]
         bgra = shift_existing_colors_toward_green(bgra, step=25)
         acc_lines = Image.fromarray(bgra[..., [2, 1, 0, 3]], mode="RGBA")
 
-        # draw new outlines in purple
+        # 6) draw outlines for exactly what got filled this tick
+        new_for_lines = [(Box(x1, y1, x2, y2), kind) for (x1, y1, x2, y2, kind) in filled_keys]
         draw_outlines_in_place(
             acc_lines,
             new_for_lines,
@@ -536,37 +474,11 @@ def main():
             color=(140, 0, 255)
         )
 
-        # 4) persist outlines for newly filled cells
-        new_for_lines: List[Tuple[Box, str]] = []
-        for (x1, y1, x2, y2, _kind) in filled_keys:
-            filled_cells.add(cell_key(x1, y1, x2, y2))
-            new_for_lines.append((Box(x1, y1, x2, y2), "cell"))
-
-        # shift the existing outline canvas FIRST
-        arr = np.array(acc_lines)                     # RGBA
-        bgra = arr[..., [2, 1, 0, 3]]                 # -> BGRA
-        bgra = shift_existing_colors_toward_green(bgra, step=25)  # bump step so it is visible
-        shifted_rgba = bgra[..., [2, 1, 0, 3]]        # -> RGBA
-        acc_lines = Image.fromarray(shifted_rgba, mode="RGBA")
-
-        # now draw the NEW outlines in neon purple (RGB for PIL)
-        new_for_lines: List[Tuple[Box, str]] = []
-        for (x1, y1, x2, y2, _kind) in filled_keys:
-            filled_cells.add(cell_key(x1, y1, x2, y2))
-            new_for_lines.append((Box(x1, y1, x2, y2), "cell"))
-
-        draw_outlines_in_place(
-            acc_lines,
-            new_for_lines,
-            w_box=3,
-            w_inter=3,
-            alpha=255,
-            color=(140, 0, 255)  # neon purple in RGB
-        )
-
         # 5) save a unique frame for animation
         frame_path = output_dir / f"frame_{frame_idx:06d}.png"
         H, W = frame.shape[:2]
+        xs.update([0, W])
+        ys.update([0, H])
 
         # For saving (transparent background)
         out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
