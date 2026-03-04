@@ -1,10 +1,11 @@
 import os
+from pathlib import Path
 import time
 import random
 from dataclasses import dataclass
 from typing import List, Tuple
 from collections import deque
-
+import numpy as np
 import cv2
 import torch
 from PIL import Image, ImageDraw
@@ -184,8 +185,25 @@ def render_fill_layer(W, H, items, gen_folder):
 
     return layer, filled_keys
 
-import cv2
-import numpy as np
+
+
+def render_outline_layer(W, H, items, w_box=6, w_inter=12):
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+    for b, kind in items:
+        if b.area == 0:
+            continue
+        width = w_inter if kind == "intersect" else w_box
+        draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=(0,255,0,255), width=width)
+    return layer
+
+def draw_outlines_in_place(img: Image.Image, items: List[Tuple[Box, str]], w_box=3, w_inter=5, alpha=220):
+    draw = ImageDraw.Draw(img)
+    for b, kind in items:
+        if b.area == 0:
+            continue
+        width = w_inter if kind == "intersect" else w_box
+        draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=(0, 255, 0, alpha), width=width)
 
 NEON_BLUE  = np.array([255,   0, 140], dtype=np.uint8)  # B, G, R
 NEON_GREEN = np.array([  0, 255, 120], dtype=np.uint8)  # B, G, R
@@ -217,8 +235,13 @@ def shift_existing_colors_toward_green(rgba_canvas: np.ndarray, step: int = 6) -
 def draw_rectangles_neon_blue(rgba_canvas: np.ndarray, boxes_xyxy, thickness: int = 4, alpha: int = 255):
     """
     boxes_xyxy: iterable of (x1, y1, x2, y2) ints
-    rgba_canvas: BGRA
+    rgba_canvas: BGRA (uint8) array.  The function will ensure the array is
+    contiguous, which OpenCV requires.
     """
+    # OpenCV needs a contiguous array of correct dtype
+    if not rgba_canvas.flags['C_CONTIGUOUS'] or rgba_canvas.dtype != np.uint8:
+        rgba_canvas = np.ascontiguousarray(rgba_canvas, dtype=np.uint8)
+
     for (x1, y1, x2, y2) in boxes_xyxy:
         cv2.rectangle(
             rgba_canvas,
@@ -228,24 +251,6 @@ def draw_rectangles_neon_blue(rgba_canvas: np.ndarray, boxes_xyxy, thickness: in
             thickness=thickness,
             lineType=cv2.LINE_AA
         )
-
-def render_outline_layer(W, H, items, w_box=6, w_inter=12):
-    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(layer)
-    for b, kind in items:
-        if b.area == 0:
-            continue
-        width = w_inter if kind == "intersect" else w_box
-        draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=(0,255,0,255), width=width)
-    return layer
-
-def draw_outlines_in_place(img: Image.Image, items: List[Tuple[Box, str]], w_box=3, w_inter=5, alpha=220):
-    draw = ImageDraw.Draw(img)
-    for b, kind in items:
-        if b.area == 0:
-            continue
-        width = w_inter if kind == "intersect" else w_box
-        draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=(0, 255, 0, alpha), width=width)
 
 def pick_edge_pair(vals, min_span):
     """
@@ -296,8 +301,16 @@ def add_history_intersections(
     return inters
 
 def main():
-    gen_folder = "/Users/j_laptop/mementomori/gen_images"
-    out_path = "/Users/j_laptop/mementomori/accumulated.png"
+    base_dir = Path(os.path.expanduser("~/mementomori"))
+    gen_folder = str(base_dir / "gen_images")
+    Path(gen_folder).mkdir(parents=True, exist_ok=True)
+
+    # Frame outputs: numbered frames for animation + a stable "latest.png" for projection
+    output_dir = base_dir / "frames"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    latest_path = base_dir / "latest.png"
+
+    frame_idx = 0
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -441,21 +454,36 @@ def main():
         for (x1, y1, x2, y2, _kind) in filled_keys:
             filled_cells.add(cell_key(x1, y1, x2, y2))
             new_for_lines.append((Box(x1, y1, x2, y2), "cell"))
-        
-        #5) new boxes have a blue outline and fade out over time; intersections have a thicker outline and fade slower
-        # convert PIL Image to numpy array for cv2 operations
-        arr = np.array(acc_lines)
-        bgra = np.ascontiguousarray(arr[..., [2, 1, 0, 3]])
-        draw_rectangles_neon_blue(bgra, [geom_key(b) for b, _ in new_for_lines], thickness=2, alpha=220)
-        shifted_rgba = bgra[..., [2, 1, 0, 3]]
-        acc_lines = Image.fromarray(shifted_rgba, mode="RGBA")
 
         # thin outlines
         draw_outlines_in_place(acc_lines, new_for_lines, w_box=2, w_inter=2, alpha=220)
 
+        # shade new boxes in neon blue on the outline layer (which will be blended on top)
+        new_boxes = [b for (b, kind) in new_for_lines if kind == "cell"]
+        # get numpy array in RGBA order
+        arr = np.array(acc_lines)
+        # convert to BGRA so cv2 and shift logic (which expect BGRA) work correctly
+        bgra = arr[..., [2, 1, 0, 3]]
+        draw_rectangles_neon_blue(bgra, [geom_key(b) for b in new_boxes], thickness=3, alpha=255)
+        # shift colors on the BGRA representation
+        shifted_bgra = shift_existing_colors_toward_green(bgra)
+        # convert back to RGBA for PIL
+        shifted_rgba = shifted_bgra[..., [2, 1, 0, 3]]
+        acc_lines = Image.fromarray(shifted_rgba, mode="RGBA")
+
         out = acc_fill.copy()
         out.alpha_composite(acc_lines)
-        out.save(out_path)
+
+        # 5) save a unique frame for animation
+        frame_path = output_dir / f"frame_{frame_idx:06d}.png"
+        out.save(frame_path)
+
+        # 6) also update a stable filename for the projector (atomic replace)
+        tmp_latest = latest_path.with_suffix(".tmp.png")
+        out.save(tmp_latest)
+        os.replace(tmp_latest, latest_path)
+
+        frame_idx += 1
 
         print(
             "yolo_boxes", len(boxes_now),
