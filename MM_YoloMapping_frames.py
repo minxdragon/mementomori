@@ -497,7 +497,7 @@ def main():
         acc_lines = Image.fromarray(bgra[..., [2, 1, 0, 3]], mode="RGBA")
 
         # 6) draw outlines for exactly what got filled this tick
-        new_for_lines = [(Box(x1, y1, x2, y2), kind) for (x1, y1, x2, y2, kind) in filled_keys]
+        new_for_lines = [(Box(x1, y1, x2, y2), kind) for (x1, y1, x2, y2, kind) in filled_keys if kind == "box"]
         draw_outlines_in_place(
             acc_lines,
             new_for_lines,
