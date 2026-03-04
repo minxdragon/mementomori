@@ -139,10 +139,7 @@ def load_random_fill_image(gen_folder: str) -> Image.Image | None:
         return None
     path = os.path.join(gen_folder, random.choice(files))
     try:
-        im = Image.open(path)
-        if im.mode in ("RGBA", "LA") or ("transparency" in im.info):
-            im = im.convert("RGB")          # drop alpha
-        return im.convert("RGBA")           # re-add opaque alpha
+        return Image.open(path).convert("RGBA")
     except Exception:
         return None
 
@@ -182,6 +179,7 @@ def render_fill_layer(W, H, items, gen_folder):
             continue
 
         tile = center_crop_to_aspect(src.convert("RGBA"), b.w, b.h)
+<<<<<<< HEAD
 
         # If tile is fully transparent, skip it and try another source next loop
         if tile.getbbox() is None:
@@ -189,10 +187,11 @@ def render_fill_layer(W, H, items, gen_folder):
 
         # Force opaque alpha so fills never disappear
         tile.putalpha(255)
+=======
+>>>>>>> parent of b7b5a04 (tried new intersections)
         layer.alpha_composite(tile, dest=(b.x1, b.y1))
 
         filled_keys.append((b.x1, b.y1, b.x2, b.y2, kind))
-        print("tile bbox", tile.getbbox(), "src", getattr(src, "mode", None))
 
     return layer, filled_keys
 
@@ -400,13 +399,36 @@ def main():
         for b in boxes_now:
             if accept_rect(b):
                 new_accepts += 1
+<<<<<<< HEAD
         # 3) build fill list
+=======
+
+        # 2) bound accepted rects and edge sets for performance
+        if len(accepted_rects) > MAX_ACCEPTED_RECTS:
+            # drop oldest; rebuild edges and known set from remaining
+            accepted_rects[:] = accepted_rects[-MAX_ACCEPTED_RECTS:]
+            known_rects = set(geom_key(r) for r in accepted_rects)
+            xs = set()
+            ys = set()
+            for r in accepted_rects:
+                xs.update([r.x1, r.x2])
+                ys.update([r.y1, r.y2])
+
+        if len(xs) > MAX_EDGES:
+            xs = set(sorted(xs)[-MAX_EDGES:])
+        if len(ys) > MAX_EDGES:
+            ys = set(sorted(ys)[-MAX_EDGES:])
+
+        # 3) build candidate cells and fill a few new ones
+        # 3) randomly sample cells (chaotic) instead of adjacent-grid cells
+>>>>>>> parent of b7b5a04 (tried new intersections)
         to_fill: List[Tuple[Box, str]] = []
 
         # A) live overlay: fill current YOLO boxes every tick
         for b in boxes_now:
             to_fill.append((b, "box"))
 
+<<<<<<< HEAD
         # B) fill intersections involving new boxes
         for nb in boxes_now:
             for hb in accepted_rects:
@@ -433,6 +455,16 @@ def main():
         #         return [vals[0], vals[-1]]
         #     idx = np.linspace(0, len(mid) - 1, k).round().astype(int)
         #     return [vals[0]] + [mid[i] for i in idx] + [vals[-1]]
+=======
+        ATTEMPTS_PER_TICK = 250          # raise if it struggles to find new cells
+        EDGE_JITTER_PX = 6               # 0 to disable; keep small so it still "snaps"
+        MIN_W = CELL_MIN_W
+        MIN_H = CELL_MIN_H
+
+        attempts = 0
+        while attempts < ATTEMPTS_PER_TICK and len(to_fill) < MAX_CELL_FILLS_PER_TICK:
+            attempts += 1
+>>>>>>> parent of b7b5a04 (tried new intersections)
 
         # cell_fills = 0
 
@@ -466,6 +498,7 @@ def main():
         inter_items = [(b, k) for (b, k) in to_fill if k == "intersect"]
         box_items   = [(b, k) for (b, k) in to_fill if k == "box"]
 
+<<<<<<< HEAD
         filled_keys = []
 
         # 4a) intersections: stamp once, then protect those pixels forever
@@ -506,6 +539,10 @@ def main():
             alpha=255,
             color=(140, 0, 255)
         )
+=======
+        fill_layer, filled_keys = render_fill_layer(W, H, to_fill, gen_folder=gen_folder)
+        acc_fill.alpha_composite(fill_layer)
+>>>>>>> parent of b7b5a04 (tried new intersections)
 
         # 5) save a unique frame for animation
         frame_path = output_dir / f"frame_{frame_idx:06d}.png"
