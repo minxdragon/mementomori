@@ -32,7 +32,7 @@ class Track:
 class Config:
     Q:int=24
     CONF:float=0.25
-    DETECT_EVERY:int=3
+    DETECT_EVERY:int=4 #how frequently to run detection (frames)
     SMOOTH_T:float=0.25
     LIVE_SECONDS:float=4.0
     MISS_SECONDS:float=0.8
@@ -43,7 +43,9 @@ class Config:
     FROZEN_THICK_OUTER:int=7
     FROZEN_THICK_INNER:int=2
     FILL_ALPHA:int=255
+    MAX_CELLS = 300
 
+patch_cache = {}
 
 def clamp_box(b:Box, W:int, H:int)->Box:
     x1=max(0,min(W,b.x1)); y1=max(0,min(H,b.y1))
@@ -105,7 +107,10 @@ def random_nature_patch(nature_imgs:List[Image.Image], w:int, h:int, rng:random.
     src=rng.choice(nature_imgs); sw,sh=src.size
     scale=max(w/sw, h/sh, 0.01)
     rw,rh=int(sw*scale+0.5), int(sh*scale+0.5)
-    resized=src.resize((rw,rh), Image.BICUBIC)
+    key=(id(src), rw, rh)
+    if key not in patch_cache:
+        patch_cache[key]=src.resize((rw,rh), Image.BICUBIC)
+    resized=patch_cache[key]
     x0=0 if rw==w else rng.randrange(0, max(1,rw-w))
     y0=0 if rh==h else rng.randrange(0, max(1,rh-h))
     return resized.crop((x0,y0,x0+w,y0+h)).convert("RGBA")
@@ -252,6 +257,8 @@ def main():
                 results=model(frame)
                 persons=results.xyxy[0].cpu().numpy()
                 detections=boxes_from_yolo_xyxy(persons,W,H,cfg.CONF)
+                MAX_DETECTIONS = 8
+                detections = sorted(detections, key=lambda b: b.area, reverse=True)[:MAX_DETECTIONS]
 
             # greedy match
             unmatched=set(range(len(detections)))
@@ -293,6 +300,7 @@ def main():
             if froze_any:
                 rects=find_closed_rectangles(grid)
                 rects_sorted=sorted(set(rects), key=lambda b:b.area, reverse=True)
+                rects_sorted = rects_sorted[:cfg.MAX_CELLS]
                 acc_fill.paste((0,0,0,0),(0,0,W,H))
                 for b in frozen_boxes:
                     rng=random.Random(seed_from_rect("box",b))
