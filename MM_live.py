@@ -1,9 +1,11 @@
+
 import os
 from pathlib import Path
 import time
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple, Set
 import random
+import hashlib
 
 import numpy as np
 import cv2
@@ -141,47 +143,65 @@ def load_nature_images(nature_dir: Path) -> List[Image.Image]:
     return imgs
 
 
-def stamp_frozen_nature(accum: Image.Image, b: Box, nature_imgs: List[Image.Image]):
+def stamp_frozen_fill(acc_fill: Image.Image,
+                     b: Box,
+                     nature_imgs: List[Image.Image],
+                     *,
+                     fill_alpha: int = 255,
+                     rng: Optional[random.Random] = None):
+    """Fill a rectangle with a nature image crop (overwrite).
+    Used when repainting all detected closed rectangles.
     """
-    Stamp a filled rectangle into the permanent layer:
-    - Fill with a resized crop from a random nature image.
-    - Add a green outline so it reads clearly.
-    Fallback: solid green fill if no nature images available.
-    """
-    draw = ImageDraw.Draw(accum)
-
-    if b.area <= 0:
+    if b.w <= 0 or b.h <= 0:
         return
 
+    W, H = acc_fill.size
+    b = clamp_box(b, W, H)
+    x1, y1, x2, y2 = int(b.x1), int(b.y1), int(b.x2), int(b.y2)
+    if x2 <= x1 or y2 <= y1:
+        return
+
+    tw, th = x2 - x1, y2 - y1
+
     if nature_imgs:
-        src = random.choice(nature_imgs)
-
-        # Choose a crop with roughly the same aspect ratio as the box.
-        tw, th = max(1, b.w), max(1, b.h)
-        tar_ar = tw / th
-
+        if rng is None:
+            rng = random
+        src = rng.choice(nature_imgs)
         sw, sh = src.size
+        if sw <= 1 or sh <= 1:
+            return
+
+        target_ar = tw / th
         src_ar = sw / sh
 
-        if src_ar > tar_ar:
-            # crop width
-            new_w = int(round(sh * tar_ar))
-            x0 = random.randint(0, max(0, sw - new_w))
+        if src_ar >= target_ar:
+            new_w = max(1, int(sh * target_ar))
+            x0 = rng.randint(0, max(0, sw - new_w))
             crop = src.crop((x0, 0, x0 + new_w, sh))
         else:
-            # crop height
-            new_h = int(round(sw / tar_ar))
-            y0 = random.randint(0, max(0, sh - new_h))
+            new_h = max(1, int(sw / target_ar))
+            y0 = rng.randint(0, max(0, sh - new_h))
             crop = src.crop((0, y0, sw, y0 + new_h))
 
         patch = crop.resize((tw, th), resample=Image.BILINEAR).convert("RGBA")
-        accum.alpha_composite(patch, (b.x1, b.y1))
     else:
-        fill = (0, 255, 0, 255)
-        draw.rectangle([b.x1, b.y1, b.x2, b.y2], fill=fill)
+        patch = Image.new("RGBA", (tw, th), (0, 255, 0, 255))
 
-    outline = (80, 255, 80, 255)
-    draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=outline, width=2)
+    if fill_alpha < 255:
+        arr = np.array(patch, dtype=np.uint8)
+        a = arr[:, :, 3].astype(np.uint16)
+        arr[:, :, 3] = (a * fill_alpha // 255).astype(np.uint8)
+        patch = Image.fromarray(arr, mode="RGBA")
+
+    acc_fill.paste(patch, (x1, y1))
+def stamp_frozen_outline(acc_lines: Image.Image, b: Box):
+    """Stamp a permanent green outline into the persistent lines layer."""
+    draw = ImageDraw.Draw(acc_lines)
+    green = (0, 255, 0, 255)
+
+    # Double-stroke: thick + thin gives density and intersection legibility
+    draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=green, width=6)
+    draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=green, width=2)
 
 
 def pil_rgba_to_bgr(im: Image.Image) -> np.ndarray:
@@ -189,6 +209,88 @@ def pil_rgba_to_bgr(im: Image.Image) -> np.ndarray:
     return cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
 
 
+
+
+def detect_closed_rectangles(acc_lines: Image.Image,
+                            *,
+                            min_w: int = 24,
+                            min_h: int = 24,
+                            dilate_px: int = 1,
+                            wall_thresh: int = 200,
+                            extent_thresh: float = 0.80,
+                            wall_side_thresh: float = 0.65) -> List[Tuple[int, int, int, int]]:
+    """Detect enclosed axis-aligned rectangular regions implied by the current line layer.
+
+    Returns a list of rectangle bounds (x1,y1,x2,y2). Designed to be tolerant of thick/AA lines.
+    """
+    arr = np.array(acc_lines, dtype=np.uint8)  # RGBA
+    alpha = arr[:, :, 3]
+
+    wall = (alpha >= wall_thresh).astype(np.uint8) * 255
+    if dilate_px > 0:
+        k = 2 * dilate_px + 1
+        wall = cv2.dilate(wall, np.ones((k, k), np.uint8), iterations=1)
+
+    H, W = wall.shape[:2]
+
+    wall[0, :] = 255
+    wall[-1, :] = 255
+    wall[:, 0] = 255
+    wall[:, -1] = 255
+
+    free = (wall == 0).astype(np.uint8)
+
+    num, labels = cv2.connectedComponents(free, connectivity=4)
+    if num <= 1:
+        return []
+
+    border_labels = set(np.unique(np.concatenate([
+        labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]
+    ])))
+
+    def side_wall_ratio(x1, y1, x2, y2) -> float:
+        top = wall[y1, x1:x2]
+        bot = wall[y2 - 1, x1:x2]
+        left = wall[y1:y2, x1]
+        right = wall[y1:y2, x2 - 1]
+        tot = (top.size + bot.size + left.size + right.size)
+        if tot <= 0:
+            return 0.0
+        hit = (np.count_nonzero(top) + np.count_nonzero(bot) +
+               np.count_nonzero(left) + np.count_nonzero(right))
+        return hit / tot
+
+    rects: List[Tuple[int, int, int, int]] = []
+
+    for lab in range(1, num):
+        if lab in border_labels:
+            continue
+
+        ys, xs = np.where(labels == lab)
+        if xs.size == 0:
+            continue
+
+        x1, x2 = int(xs.min()), int(xs.max()) + 1
+        y1, y2 = int(ys.min()), int(ys.max()) + 1
+        w, h = x2 - x1, y2 - y1
+        if w < min_w or h < min_h:
+            continue
+
+        area = int(xs.size)
+        rect_area = int(w * h)
+        if rect_area <= 0:
+            continue
+
+        extent = area / rect_area
+        if extent < extent_thresh:
+            continue
+
+        if side_wall_ratio(x1, y1, x2, y2) < wall_side_thresh:
+            continue
+
+        rects.append((x1, y1, x2, y2))
+
+    return rects
 # -----------------------------
 # Main
 # -----------------------------
@@ -212,7 +314,8 @@ def main():
     model = torch.hub.load("ultralytics/yolov5", "yolov5s")
     model.eval()
 
-    acc_frozen: Optional[Image.Image] = None
+    acc_fill: Optional[Image.Image] = None
+    acc_lines: Optional[Image.Image] = None
 
     tracks: List[Track] = []
     next_id = 1
@@ -247,8 +350,9 @@ def main():
         now = time.time()
         H, W = frame.shape[:2]
 
-        if acc_frozen is None or acc_frozen.size != (W, H):
-            acc_frozen = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        if acc_fill is None or acc_lines is None or acc_fill.size != (W, H) or acc_lines.size != (W, H):
+            acc_fill = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            acc_lines = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             tracks.clear()
             next_id = 1
             frozen_keys.clear()
@@ -295,6 +399,7 @@ def main():
 
         # Freeze tracks that have existed long enough
         froze_any = False
+        frozen_boxes_this_frame: List[Box] = []
         for t in tracks:
             if t.frozen:
                 continue
@@ -305,15 +410,47 @@ def main():
                 k = geom_key(qb)
                 if qb.area > 0 and k not in frozen_keys:
                     frozen_keys.add(k)
-                    stamp_frozen_nature(acc_frozen, qb, nature_imgs)
+                    stamp_frozen_outline(acc_lines, qb)
+                    frozen_boxes_this_frame.append(qb)
                     froze_any = True
+
+        if froze_any:
+            # Always fill newly frozen person-rectangles, even if cell detection fails.
+            for qb in frozen_boxes_this_frame:
+                key = f"freeze:{qb.x1},{qb.y1},{qb.x2},{qb.y2}:{now}".encode("utf-8")
+                seed = int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "little")
+                rng = random.Random(seed)
+                stamp_frozen_fill(acc_fill, qb, nature_imgs, fill_alpha=255, rng=rng)
+
+            # Try to repaint fills for every closed rectangle so each cell gets its own image.
+            rects = detect_closed_rectangles(
+                acc_lines,
+                min_w=Q,
+                min_h=Q,
+                dilate_px=0,
+                wall_thresh=40,
+                extent_thresh=0.55,
+                wall_side_thresh=0.45,
+            )
+
+            # Only clear and repaint if we actually found any rectangles.
+            if rects:
+                # Paint big first, then small on top, so small cells keep their own image.
+                rects = sorted(set(rects), key=lambda r: (r[2]-r[0])*(r[3]-r[1]), reverse=True)
+                acc_fill.paste((0, 0, 0, 0), (0, 0, W, H))
+                for (x1, y1, x2, y2) in rects:
+                    key = f"{x1},{y1},{x2},{y2}".encode("utf-8")
+                    seed = int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "little")
+                    rng = random.Random(seed)
+                    stamp_frozen_fill(acc_fill, Box(x1, y1, x2, y2), nature_imgs, fill_alpha=255, rng=rng)
 
         # Compose output: frozen layer + live layer
         live_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         draw_live_tracks_rgba(live_layer, tracks, now)
 
         out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        out.alpha_composite(acc_frozen)
+        out.alpha_composite(acc_fill)
+        out.alpha_composite(acc_lines)
         out.alpha_composite(live_layer)
 
         # Live projector view
