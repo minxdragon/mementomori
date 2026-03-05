@@ -30,7 +30,7 @@ class Track:
 
 @dataclass
 class Config:
-    Q:int=16 #uniformity. lower is less uniform, higher is more uniform
+    Q:int=20 #uniformity. lower is less uniform, higher is more uniform
     CONF:float=0.45 #confidence threshold for person detection
     DETECT_EVERY:int=6 #how frequently to run detection (frames)
     SMOOTH_T:float=0.25
@@ -43,7 +43,7 @@ class Config:
     FROZEN_THICK_OUTER:int=2
     FROZEN_THICK_INNER:int=2
     FILL_ALPHA:int=255
-    MAX_CELLS = 300
+    MAX_CELLS = 150
 
 patch_cache = {}
 
@@ -169,37 +169,55 @@ def add_box_edges(grid:Grid, b:Box):
     grid.Vedge[gy0:gy1,gx0]=1
     grid.Vedge[gy0:gy1,gx1]=1
 
-def find_closed_rectangles(grid:Grid)->List[Box]:
-    from collections import deque
-    Hedge,Vedge=grid.Hedge,grid.Vedge
-    GHc,GWc=grid.GH-2, grid.GW-2
-    Q=grid.Q
-    visited=np.zeros((GHc,GWc),dtype=np.uint8)
-    rects=[]
-    def neigh(y,x):
-        gy,gx=y+1,x+1
-        if y>0 and Hedge[gy,gx]==0: yield (y-1,x)
-        if y<GHc-1 and Hedge[gy+1,gx]==0: yield (y+1,x)
-        if x>0 and Vedge[gy,gx]==0: yield (y,x-1)
-        if x<GWc-1 and Vedge[gy,gx+1]==0: yield (y,x+1)
-    for sy in range(GHc):
-        for sx in range(GWc):
-            if visited[sy,sx]: continue
-            q=deque([(sy,sx)]); visited[sy,sx]=1
-            cells=0; minx=maxx=sx; miny=maxy=sy
-            touches=(sx==0 or sy==0 or sx==GWc-1 or sy==GHc-1)
-            while q:
-                y,x=q.popleft(); cells+=1
-                minx,maxx=min(minx,x),max(maxx,x)
-                miny,maxy=min(miny,y),max(maxy,y)
-                if x==0 or y==0 or x==GWc-1 or y==GHc-1: touches=True
-                for ny,nx in neigh(y,x):
-                    if not visited[ny,nx]:
-                        visited[ny,nx]=1; q.append((ny,nx))
-            if touches: continue
-            w=maxx-minx+1; h=maxy-miny+1
-            if cells!=w*h: continue
-            rects.append(Box(minx*Q,miny*Q,(maxx+1)*Q,(maxy+1)*Q))
+def find_closed_rectangles(grid: Grid) -> List[Box]:
+    Hedge = grid.Hedge
+    Vedge = grid.Vedge
+    Q = grid.Q
+
+    GHc = grid.GH - 2
+    GWc = grid.GW - 2
+
+    rects = []
+
+    for y0 in range(GHc):
+        for y1 in range(y0 + 1, GHc + 1):
+
+            # check horizontal edges exist
+            if not np.any(Hedge[y0 + 1]): 
+                continue
+            if not np.any(Hedge[y1 + 1]):
+                continue
+
+            for x0 in range(GWc):
+                for x1 in range(x0 + 1, GWc + 1):
+
+                    if Hedge[y0 + 1, x0 + 1] == 0:
+                        continue
+                    if Hedge[y1 + 1, x0 + 1] == 0:
+                        continue
+                    if Hedge[y0 + 1, x1 + 1] == 0:
+                        continue
+                    if Hedge[y1 + 1, x1 + 1] == 0:
+                        continue
+
+                    if Vedge[y0 + 1, x0 + 1] == 0:
+                        continue
+                    if Vedge[y1 + 1, x0 + 1] == 0:
+                        continue
+                    if Vedge[y0 + 1, x1 + 1] == 0:
+                        continue
+                    if Vedge[y1 + 1, x1 + 1] == 0:
+                        continue
+
+                    rects.append(
+                        Box(
+                            x0 * Q,
+                            y0 * Q,
+                            x1 * Q,
+                            y1 * Q
+                        )
+                    )
+
     return rects
 
 
@@ -312,7 +330,7 @@ def main():
                     rects = find_closed_rectangles(grid)
                 rects_sorted=sorted(set(rects), key=lambda b:b.area, reverse=True)
                 rects_sorted = rects_sorted[:cfg.MAX_CELLS]
-                acc_fill.paste((0,0,0,0),(0,0,W,H))
+                #acc_fill.paste((0,0,0,0),(0,0,W,H))
                 for b in frozen_boxes:
                     rng=random.Random(seed_from_rect("box",b))
                     stamp_fill(acc_fill,b,nature_imgs,cfg.FILL_ALPHA,rng)
