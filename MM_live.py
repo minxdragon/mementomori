@@ -11,6 +11,7 @@ import numpy as np
 import cv2
 import torch
 from PIL import Image, ImageDraw
+from collections import deque
 
 
 # -----------------------------
@@ -59,6 +60,18 @@ def quantize_box(b: Box, q: int) -> Box:
     y2 = ((b.y2 + q - 1) // q) * q
     return Box(x1, y1, x2, y2)
 
+def add_box_edges(Hedge, Vedge, b, Q):
+    # b is a quantized Box in pixel coords
+    gx0 = 1 + max(0, min(GW0, b.x1 // Q))
+    gx1 = 1 + max(0, min(GW0, b.x2 // Q))
+    gy0 = 1 + max(0, min(GH0, b.y1 // Q))
+    gy1 = 1 + max(0, min(GH0, b.y2 // Q))
+    if gx1 <= gx0 or gy1 <= gy0:
+        return
+    Hedge[gy0, gx0:gx1] = 1
+    Hedge[gy1, gx0:gx1] = 1
+    Vedge[gy0:gy1, gx0] = 1
+    Vedge[gy0:gy1, gx1] = 1
 
 def boxes_from_yolo(persons, W: int, H: int, conf_thresh: float = 0.25, q: int = 8) -> List[Box]:
     out: List[Box] = []
@@ -100,7 +113,68 @@ def lerp_box(a: Box, b: Box, t: float) -> Box:
         int(round(a.y2 + (b.y2 - a.y2) * t)),
     )
 
+def find_closed_rectangles_on_grid(Hedge, Vedge):
+    GH = Vedge.shape[0]
+    GW = Hedge.shape[1]
+    Q = 24
+    visited = np.zeros((GH, GW), dtype=np.uint8)
+    rects = []
 
+    def neighbors(y, x):
+        # up
+        if y > 0 and Hedge[y, x] == 0:
+            yield (y - 1, x)
+        # down
+        if y < GH - 1 and Hedge[y + 1, x] == 0:
+            yield (y + 1, x)
+        # left
+        if x > 0 and Vedge[y, x] == 0:
+            yield (y, x - 1)
+        # right
+        if x < GW - 1 and Vedge[y, x + 1] == 0:
+            yield (y, x + 1)
+
+    for sy in range(GH):
+        for sx in range(GW):
+            if visited[sy, sx]:
+                continue
+            q = deque([(sy, sx)])
+            visited[sy, sx] = 1
+
+            cells = 0
+            minx = maxx = sx
+            miny = maxy = sy
+            touches_border = (sx == 0 or sy == 0 or sx == GW - 1 or sy == GH - 1)
+
+            while q:
+                y, x = q.popleft()
+                cells += 1
+                if x < minx: minx = x
+                if x > maxx: maxx = x
+                if y < miny: miny = y
+                if y > maxy: maxy = y
+                if x == 0 or y == 0 or x == GW - 1 or y == GH - 1:
+                    touches_border = True
+
+                for ny, nx in neighbors(y, x):
+                    if not visited[ny, nx]:
+                        visited[ny, nx] = 1
+                        q.append((ny, nx))
+
+            if touches_border:
+                continue
+
+            w = (maxx - minx + 1)
+            h = (maxy - miny + 1)
+            if cells != w * h:
+                continue  # enclosed but not a rectangle
+
+            # convert cell bbox to pixel bbox
+            x1, y1 = minx * Q, miny * Q
+            x2, y2 = (maxx + 1) * Q, (maxy + 1) * Q
+            rects.append((x1, y1, x2, y2))
+
+    return rects
 # -----------------------------
 # Tracking
 # -----------------------------
@@ -198,6 +272,7 @@ def stamp_frozen_outline(acc_lines: Image.Image, b: Box):
     """Stamp a permanent green outline into the persistent lines layer."""
     draw = ImageDraw.Draw(acc_lines)
     green = (0, 255, 0, 255)
+    
 
     # Double-stroke: thick + thin gives density and intersection legibility
     draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=green, width=6)
@@ -353,9 +428,18 @@ def main():
         if acc_fill is None or acc_lines is None or acc_fill.size != (W, H) or acc_lines.size != (W, H):
             acc_fill = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             acc_lines = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+
             tracks.clear()
             next_id = 1
             frozen_keys.clear()
+            frozen_boxes: List[Box] = []
+
+            # --- grid geometry ---
+            GW0, GH0 = W // Q, H // Q
+            GW, GH = GW0 + 2, GH0 + 2
+
+            Hedge = np.zeros((GH + 1, GW), dtype=np.uint8)
+            Vedge = np.zeros((GH, GW + 1), dtype=np.uint8)
 
         detections: List[Box] = []
         if frame_idx % DETECT_EVERY == 0:
@@ -400,6 +484,7 @@ def main():
         # Freeze tracks that have existed long enough
         froze_any = False
         frozen_boxes_this_frame: List[Box] = []
+        
         for t in tracks:
             if t.frozen:
                 continue
@@ -411,17 +496,39 @@ def main():
                 if qb.area > 0 and k not in frozen_keys:
                     frozen_keys.add(k)
                     stamp_frozen_outline(acc_lines, qb)
+                    add_box_edges(Hedge, Vedge, qb, Q)
+                    if qb.area > 0 and k not in frozen_keys:
+                        frozen_keys.add(k)
+                        stamp_frozen_outline(acc_lines, qb)
+                        add_box_edges(Hedge, Vedge, qb, Q)
+                        frozen_boxes.append(qb)   # <-- add here
+                        frozen_boxes_this_frame.append(qb)
+                        froze_any = True
+
                     frozen_boxes_this_frame.append(qb)
                     froze_any = True
 
         if froze_any:
-            # Always fill newly frozen person-rectangles, even if cell detection fails.
-            for qb in frozen_boxes_this_frame:
-                key = f"freeze:{qb.x1},{qb.y1},{qb.x2},{qb.y2}:{now}".encode("utf-8")
-                seed = int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "little")
-                rng = random.Random(seed)
-                stamp_frozen_fill(acc_fill, qb, nature_imgs, fill_alpha=255, rng=rng)
+            rects = find_closed_rectangles_on_grid(Hedge, Vedge)
+            print("grid closed rects:", len(rects))
 
+            # repaint fills: big first, small on top
+            rects = sorted(set(rects), key=lambda r: (r[2]-r[0])*(r[3]-r[1]), reverse=True)
+            acc_fill.paste((0, 0, 0, 0), (0, 0, W, H))
+
+# fill frozen YOLO boxes first
+        for b in frozen_boxes:
+            key = f"box:{b.x1},{b.y1},{b.x2},{b.y2}".encode("utf-8")
+            seed = int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "little")
+            rng = random.Random(seed)
+            stamp_frozen_fill(acc_fill, b, nature_imgs, fill_alpha=255, rng=rng)
+
+        # then fill detected closed cells on top (smaller ones win)
+        for (x1, y1, x2, y2) in rects:
+            key = f"cell:{x1},{y1},{x2},{y2}".encode("utf-8")
+            seed = int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "little")
+            rng = random.Random(seed)
+            stamp_frozen_fill(acc_fill, Box(x1, y1, x2, y2), nature_imgs, fill_alpha=255, rng=rng)
             # Try to repaint fills for every closed rectangle so each cell gets its own image.
             rects = detect_closed_rectangles(
                 acc_lines,
