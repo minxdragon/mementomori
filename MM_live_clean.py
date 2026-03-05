@@ -30,17 +30,17 @@ class Track:
 
 @dataclass
 class Config:
-    Q:int=24
-    CONF:float=0.25
-    DETECT_EVERY:int=4 #how frequently to run detection (frames)
+    Q:int=16 #uniformity. lower is less uniform, higher is more uniform
+    CONF:float=0.45 #confidence threshold for person detection
+    DETECT_EVERY:int=6 #how frequently to run detection (frames)
     SMOOTH_T:float=0.25
-    LIVE_SECONDS:float=4.0
-    MISS_SECONDS:float=0.8
+    LIVE_SECONDS:float=1.5 #tracking a person
+    MISS_SECONDS:float=1.2 
     IOU_THRESH:float=0.20
     PURPLE_BGRA:Tuple[int,int,int,int]=(255,0,255,255)
     GREEN_BGRA:Tuple[int,int,int,int]=(0,255,0,255)
-    LIVE_THICK:int=3
-    FROZEN_THICK_OUTER:int=7
+    LIVE_THICK:int=2
+    FROZEN_THICK_OUTER:int=2
     FROZEN_THICK_INNER:int=2
     FILL_ALPHA:int=255
     MAX_CELLS = 300
@@ -224,9 +224,16 @@ def main():
 
     cap=cv2.VideoCapture(0)
     if not cap.isOpened(): raise RuntimeError("Could not open webcam")
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
     model=torch.hub.load("ultralytics/yolov5","yolov5s")
     model.eval()
+    #control for number of detections and speed
+    model.conf = 0.45
+    model.iou = 0.45
+    model.max_det = 10
+
 
     acc_fill=None; acc_lines=None
     grid=Grid(cfg.Q)
@@ -296,9 +303,13 @@ def main():
                         stamp_frozen_outline(acc_lines, qb, cfg)
                         add_box_edges(grid, qb)
                         froze_any=True
-
-            if froze_any:
-                rects=find_closed_rectangles(grid)
+            last_rect_time = 0
+            if froze_any and (now - last_rect_time) > 0.6:
+                last_rect_time = now
+                if len(frozen_boxes) > 200:
+                    rects = []
+                else:
+                    rects = find_closed_rectangles(grid)
                 rects_sorted=sorted(set(rects), key=lambda b:b.area, reverse=True)
                 rects_sorted = rects_sorted[:cfg.MAX_CELLS]
                 acc_fill.paste((0,0,0,0),(0,0,W,H))
