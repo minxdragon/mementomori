@@ -3,7 +3,7 @@
 import os, time, random, hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple, Set
+from typing import List, Optional, Tuple, Set, Dict
 from xml.parsers.expat import model
 
 import cv2
@@ -33,18 +33,22 @@ class Track:
 class Config:
     Q:int=16
     CONF:float=0.25
-    DETECT_EVERY:int=6
-    SMOOTH_T:float=0.4 #how smooth the live box movement is (0-1)
-    LIVE_SECONDS:float=1.0 #how long before stamping
-    MISS_SECONDS:float=1.2 #how forgiving to temporary detection misses
-    IOU_THRESH:float=0.12 #How strict the match is between old box and new box
+    DETECT_EVERY:int=3
+    SMOOTH_T:float=0.25
+    LIVE_SECONDS:float=1.5
+    MISS_SECONDS:float=1.2
+    IOU_THRESH:float=0.12
+
     PURPLE_BGRA:Tuple[int,int,int,int]=(255,0,255,255)
     GREEN_BGRA:Tuple[int,int,int,int]=(0,255,0,255)
+
     LIVE_THICK:int=3
     FROZEN_THICK_OUTER:int=7
     FROZEN_THICK_INNER:int=2
     FILL_ALPHA:int=255
 
+    SAVE_INTERVAL:float=5.0
+    SAVE_NUMBERED_FRAMES:bool=True
 
 def clamp_box(b:Box, W:int, H:int)->Box:
     x1=max(0,min(W,b.x1)); y1=max(0,min(H,b.y1))
@@ -74,6 +78,15 @@ def lerp_box(a:Box,b:Box,t:float)->Box:
                int(round(a.y2+(b.y2-a.y2)*t)))
 
 def geom_key(b:Box): return (b.x1,b.y1,b.x2,b.y2)
+
+def intersection_box(a:Box,b:Box)->Optional[Box]:
+    x1=max(a.x1,b.x1)
+    y1=max(a.y1,b.y1)
+    x2=min(a.x2,b.x2)
+    y2=min(a.y2,b.y2)
+    if x2<=x1 or y2<=y1:
+        return None
+    return Box(x1,y1,x2,y2)
 
 def pil_rgba_to_bgr(img:Image.Image)->np.ndarray:
     arr=np.array(img)
@@ -214,71 +227,88 @@ def main():
     cfg=Config()
     base_dir=Path(os.path.expanduser("~/mementomori"))
     base_dir.mkdir(parents=True, exist_ok=True)
+
     nature_imgs=load_nature_images(base_dir/"nature")
-    output_dir=base_dir/"frames"; output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir=base_dir/"frames"
+    output_dir.mkdir(parents=True, exist_ok=True)
     latest_path=base_dir/"latest.png"
 
     cap=cv2.VideoCapture(0)
-    if not cap.isOpened(): raise RuntimeError("Could not open webcam")
+    if not cap.isOpened():
+        raise RuntimeError("Could not open webcam")
 
-    model=torch.hub.load("ultralytics/yolov5","yolov5n") #n for nano
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    device=torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+
+    model=torch.hub.load("ultralytics/yolov5","yolov5n")
     model.to(device)
     model.eval()
+    model.conf=0.35
+    model.iou=0.40
+    model.max_det=6
 
-    model.conf = 0.30
-    model.iou = 0.40
-    model.max_det = 6
+    acc_fill=None
+    acc_lines=None
 
-    acc_fill=None; acc_lines=None
-    grid=Grid(cfg.Q)
-    tracks=[]; next_id=1
-    frozen_keys=set(); frozen_boxes=[]
+    tracks=[]
+    next_id=1
+
+    frozen_keys=set()
+    frozen_boxes=[]
+    filled_keys=set()
+
     WIN="mementomori_live"
     cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
     cv2.setWindowProperty(WIN, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
-    frame_idx=0; saved_idx=0
+    frame_idx=0
+    saved_idx=0
+    last_save_at=0.0
+
     try:
         while True:
             ok, frame=cap.read()
             if not ok:
-                time.sleep(0.02); continue
+                time.sleep(0.02)
+                continue
+
             now=time.time()
             H,W=frame.shape[:2]
 
             if acc_fill is None or acc_lines is None or acc_fill.size!=(W,H) or acc_lines.size!=(W,H):
                 acc_fill=Image.new("RGBA",(W,H),(0,0,0,0))
                 acc_lines=Image.new("RGBA",(W,H),(0,0,0,0))
-                grid.reset(W,H)
-                tracks.clear(); next_id=1
-                frozen_keys.clear(); frozen_boxes.clear()
+
+                tracks.clear()
+                next_id=1
+
+                frozen_keys.clear()
+                frozen_boxes.clear()
+                filled_keys.clear()
 
             detections=[]
             if frame_idx % cfg.DETECT_EVERY==0:
-                scale = 0.5
-
-                small = cv2.resize(frame, (0,0), fx=scale, fy=scale)
-
-                results = model(small)
-                persons = results.xyxy[0].cpu().numpy()
-
-                # rescale boxes back to original coordinates
-                persons[:,0:4] /= scale
-                # results=model(frame)
-                # persons=results.xyxy[0].cpu().numpy()
+                scale=0.5
+                small=cv2.resize(frame,(0,0),fx=scale,fy=scale)
+                results=model(small)
+                persons=results.xyxy[0].cpu().numpy()
+                if len(persons)>0:
+                    persons[:,0:4]/=scale
                 detections=boxes_from_yolo_xyxy(persons,W,H,cfg.CONF)
 
-            # greedy match
             unmatched=set(range(len(detections)))
             live_idx=[i for i,t in enumerate(tracks) if not t.frozen]
             used=set()
+
             for di,det in enumerate(detections):
-                best_i=-1; best_s=0.0
+                best_i=-1
+                best_s=0.0
                 for ti in live_idx:
-                    if ti in used: continue
+                    if ti in used:
+                        continue
                     s=iou(det, tracks[ti].bbox)
-                    if s>best_s: best_s=s; best_i=ti
+                    if s>best_s:
+                        best_s=s
+                        best_i=ti
                 if best_i>=0 and best_s>=cfg.IOU_THRESH:
                     t=tracks[best_i]
                     tracks[best_i].bbox=lerp_box(t.bbox, det, cfg.SMOOTH_T)
@@ -294,48 +324,80 @@ def main():
             tracks=[t for t in tracks if t.frozen or (now-t.last_seen_at)<=cfg.MISS_SECONDS]
 
             froze_any=False
+            new_frozen=[]
+
             for t in tracks:
-                if t.frozen: continue
+                if t.frozen:
+                    continue
+
                 if (now-t.created_at)>=cfg.LIVE_SECONDS:
                     t.frozen=True
                     qb=quantize_box(clamp_box(t.bbox,W,H), cfg.Q)
                     k=geom_key(qb)
+
                     if qb.area>0 and k not in frozen_keys:
-                        frozen_keys.add(k); frozen_boxes.append(qb)
+                        frozen_keys.add(k)
+                        frozen_boxes.append(qb)
+                        new_frozen.append(qb)
+
                         stamp_frozen_outline(acc_lines, qb, cfg)
-                        add_box_edges(grid, qb)
+
+                        rng=random.Random(seed_from_rect("box",qb))
+                        stamp_fill(acc_fill,qb,nature_imgs,cfg.FILL_ALPHA,rng)
+
                         froze_any=True
 
-            if froze_any:
-                rects=find_closed_rectangles(grid)
-                rects_sorted=sorted(set(rects), key=lambda b:b.area, reverse=True)
-                acc_fill.paste((0,0,0,0),(0,0,W,H))
-                for b in frozen_boxes:
-                    rng=random.Random(seed_from_rect("box",b))
-                    stamp_fill(acc_fill,b,nature_imgs,cfg.FILL_ALPHA,rng)
-                for b in rects_sorted:
-                    rng=random.Random(seed_from_rect("cell",b))
-                    stamp_fill(acc_fill,b,nature_imgs,cfg.FILL_ALPHA,rng)
+            if new_frozen:
+                prior_boxes=frozen_boxes[:-len(new_frozen)] if len(new_frozen)<=len(frozen_boxes) else []
+
+                for nb in new_frozen:
+                    for ob in prior_boxes:
+                        ib=intersection_box(nb,ob)
+                        if ib is None:
+                            continue
+
+                        ib=quantize_box(clamp_box(ib,W,H),cfg.Q)
+                        if ib.area<=0:
+                            continue
+
+                        k=geom_key(ib)
+                        if k in filled_keys:
+                            continue
+
+                        filled_keys.add(k)
+                        rng=random.Random(seed_from_rect("cell",ib))
+                        stamp_fill(acc_fill,ib,nature_imgs,cfg.FILL_ALPHA,rng)
 
             live_layer=Image.new("RGBA",(W,H),(0,0,0,0))
             draw_live_tracks(live_layer, tracks, cfg)
+
             out=Image.new("RGBA",(W,H),(0,0,0,0))
-            out.alpha_composite(acc_fill); out.alpha_composite(acc_lines); out.alpha_composite(live_layer)
+            out.alpha_composite(acc_fill)
+            out.alpha_composite(acc_lines)
+            out.alpha_composite(live_layer)
 
             cv2.imshow(WIN, pil_rgba_to_bgr(out))
 
-            if froze_any:
-                frame_path=output_dir/f"fixed_{saved_idx:06d}.png"
-                out.save(frame_path)
+            if (now-last_save_at)>=cfg.SAVE_INTERVAL:
+                last_save_at=now
+
                 tmp=latest_path.with_suffix(".tmp.png")
-                out.save(tmp); os.replace(tmp, latest_path)
-                saved_idx+=1
+                out.save(tmp)
+                os.replace(tmp, latest_path)
+
+                if cfg.SAVE_NUMBERED_FRAMES:
+                    frame_path=output_dir/f"fixed_{saved_idx:06d}.png"
+                    out.save(frame_path)
+                    saved_idx+=1
 
             frame_idx+=1
             key=cv2.waitKey(1)&0xFF
-            if key==ord("q") or key==27: break
+            if key==ord("q") or key==27:
+                break
+
     finally:
-        cap.release(); cv2.destroyAllWindows()
+        cap.release()
+        cv2.destroyAllWindows()
 
 if __name__=="__main__":
     main()
