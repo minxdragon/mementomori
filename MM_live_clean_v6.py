@@ -4,6 +4,7 @@ import os, time, random, hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple, Set
+from xml.parsers.expat import model
 
 import cv2
 import numpy as np
@@ -30,9 +31,9 @@ class Track:
 
 @dataclass
 class Config:
-    Q:int=24
+    Q:int=16
     CONF:float=0.25
-    DETECT_EVERY:int=3
+    DETECT_EVERY:int=6
     SMOOTH_T:float=0.25
     LIVE_SECONDS:float=4.0
     MISS_SECONDS:float=0.8
@@ -220,7 +221,9 @@ def main():
     cap=cv2.VideoCapture(0)
     if not cap.isOpened(): raise RuntimeError("Could not open webcam")
 
-    model=torch.hub.load("ultralytics/yolov5","yolov5s")
+    model=torch.hub.load("ultralytics/yolov5","yolov5n") #n for nano
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    model.to(device)
     model.eval()
 
     acc_fill=None; acc_lines=None

@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 from PIL import Image
 import torch
+from torchgen import model
 
 @dataclass(frozen=True)
 class Box:
@@ -242,10 +243,14 @@ def main():
 
     cap=cv2.VideoCapture(0)
     if not cap.isOpened(): raise RuntimeError("Could not open webcam")
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 960)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 540)
 
-    model=torch.hub.load("ultralytics/yolov5","yolov5s")
+    model=torch.hub.load("ultralytics/yolov5","yolov5n") #n for nano
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    model.to(device)
     model.eval()
     #control for number of detections and speed
     model.conf = 0.45
@@ -279,8 +284,15 @@ def main():
 
             detections=[]
             if frame_idx % cfg.DETECT_EVERY==0:
-                results=model(frame)
-                persons=results.xyxy[0].cpu().numpy()
+                scale = 0.5
+                small = cv2.resize(frame, (0,0), fx=scale, fy=scale)
+                results = model(small)
+                persons = results.xyxy[0].cpu().numpy()
+
+                # scale boxes back
+                # persons[:,0:4] /= scale
+                # results=model(frame)
+                # persons=results.xyxy[0].cpu().numpy()
                 detections=boxes_from_yolo_xyxy(persons,W,H,cfg.CONF)
                 MAX_DETECTIONS = 8
                 detections = sorted(detections, key=lambda b: b.area, reverse=True)[:MAX_DETECTIONS]
