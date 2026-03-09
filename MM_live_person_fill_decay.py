@@ -57,7 +57,7 @@ class Config:
     DETECT_EVERY: int = 4
     DETECT_SCALE: float = 0.5
     SMOOTH_T: float = 0.40
-    LIVE_SECONDS: float = 1.1
+    LIVE_SECONDS: float = 0.9
     MISS_SECONDS: float = 1.2
     IOU_THRESH: float = 0.12
 
@@ -68,7 +68,7 @@ class Config:
     FROZEN_THICK_INNER: int = 2
 
     BOX_ALPHA: int = 235
-    BOX_DECAY_INTERVAL: float = 3.0
+    BOX_DECAY_INTERVAL: float = 5.0
     BOX_DECAY_FACTORS: Tuple[int, ...] = (1, 2, 4, 8, 12, 16)
 
     SAVE_INTERVAL: float = 1.5
@@ -281,6 +281,7 @@ def main():
     try:
         while True:
             ok, frame = cap.read()
+            frame = cv2.flip(frame, 1)   # horizontal mirror
             if not ok:
                 time.sleep(0.02)
                 continue
