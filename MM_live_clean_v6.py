@@ -226,6 +226,10 @@ def main():
     model.to(device)
     model.eval()
 
+    model.conf = 0.30
+    model.iou = 0.40
+    model.max_det = 6
+
     acc_fill=None; acc_lines=None
     grid=Grid(cfg.Q)
     tracks=[]; next_id=1
@@ -252,8 +256,17 @@ def main():
 
             detections=[]
             if frame_idx % cfg.DETECT_EVERY==0:
-                results=model(frame)
-                persons=results.xyxy[0].cpu().numpy()
+                scale = 0.5
+
+                small = cv2.resize(frame, (0,0), fx=scale, fy=scale)
+
+                results = model(small)
+                persons = results.xyxy[0].cpu().numpy()
+
+                # rescale boxes back to original coordinates
+                persons[:,0:4] /= scale
+                # results=model(frame)
+                # persons=results.xyxy[0].cpu().numpy()
                 detections=boxes_from_yolo_xyxy(persons,W,H,cfg.CONF)
 
             # greedy match
