@@ -52,7 +52,7 @@ class Tile:
 
 @dataclass
 class Config:
-    Q: int = 4
+    Q: int = 4 #lower = more chaos and less orderly. increase to 20 to make it more grid-like
     CONF: float = 0.25
     DETECT_EVERY: int = 4
     DETECT_SCALE: float = 0.5
@@ -77,7 +77,13 @@ class Config:
     MODEL_NAME: str = "yolov5n"
     MODEL_CONF: float = 0.35
     MODEL_IOU: float = 0.40
-    MODEL_MAX_DET: int = 6
+    MODEL_MAX_DET: int = 6 #increase to allow more
+
+    GENERATED_DIR: str = "generated"
+
+    GEN_START_INTERVAL: int = 12     # initial X
+    GEN_INTERVAL_GROWTH: int = 6     # increase X by this amount
+    GEN_INTERVAL_STEP: int = 40      # every Y captures increase interval
 
 
 def clamp_box(b: Box, W: int, H: int) -> Box:
@@ -244,6 +250,7 @@ def main():
     base_dir = Path(os.path.expanduser("~/mementomori"))
     base_dir.mkdir(parents=True, exist_ok=True)
     nature_imgs = load_nature_images(base_dir / "nature")
+    generated_imgs = load_nature_images(base_dir / cfg.GENERATED_DIR)
 
     output_dir = base_dir / "frames_person_fill_decay"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -269,6 +276,11 @@ def main():
 
     frozen_keys = set()
     tiles: List[Tile] = []
+
+    #capture_count is used to determine when to increase the generation interval
+    capture_count = 0
+    gen_interval = cfg.GEN_START_INTERVAL
+    next_gen_capture = gen_interval
 
     WIN = "mementomori_person_fill_decay"
     cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
@@ -362,7 +374,39 @@ def main():
                         last_decay_at=now,
                     )
                     tiles.append(tile)
+                    if len(tiles) % 10 == 0:
+                        print(f"Total stamps: {len(tiles)}")
+                    capture_count += 1
                     scene_changed = True
+                    # insert generated image occasionally
+                    if generated_imgs and capture_count >= next_gen_capture:
+
+                        rng = random.Random(capture_count)
+
+                        gw = rng.randint(W // 8, W // 3)
+                        gh = rng.randint(H // 8, H // 3)
+                        gx = rng.randint(0, max(1, W - gw))
+                        gy = rng.randint(0, max(1, H - gh))
+
+                        gb = quantize_box(Box(gx, gy, gx + gw, gy + gh), cfg.Q)
+
+                        patch = random_nature_patch(generated_imgs, gb.w, gb.h, rng)
+                        patch.putalpha(cfg.BOX_ALPHA)
+
+                        tiles.append(
+                            Tile(
+                                bbox=gb,
+                                patch_original=patch.copy(),
+                                patch_current=patch,
+                                decay_step=0,
+                                last_decay_at=now,
+                            )
+                        )
+
+                        next_gen_capture += gen_interval
+                        scene_changed = True
+                if capture_count % cfg.GEN_INTERVAL_STEP == 0:
+                    gen_interval += cfg.GEN_INTERVAL_GROWTH
 
             any_decay = False
             for tile in tiles:
@@ -398,6 +442,7 @@ def main():
                 break
 
     finally:
+        print(f"Final stamp count: {len(tiles)}")
         cap.release()
         cv2.destroyAllWindows()
 
