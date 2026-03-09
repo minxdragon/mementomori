@@ -374,38 +374,31 @@ def main():
                         decay_step=0,
                         last_decay_at=now,
                     )
-                    tiles.append(tile)
+
                     capture_count += 1
 
                     if capture_count >= next_interval_bump:
                         gen_interval += cfg.GEN_INTERVAL_GROWTH
                         next_interval_bump += cfg.GEN_INTERVAL_STEP
                         print(f"Generation interval increased to {gen_interval}")
-                    
+
                     if generated_imgs and capture_count >= next_gen_capture:
                         rng = random.Random(capture_count)
 
-                        gb = qb
+                        gen_patch = random_nature_patch(generated_imgs, qb.w, qb.h, rng)
+                        gen_patch.putalpha(cfg.BOX_ALPHA)
 
-                        patch = random_nature_patch(generated_imgs, gb.w, gb.h, rng)
-                        patch.putalpha(cfg.BOX_ALPHA)
+                        tile.patch_original = gen_patch.copy()
+                        tile.patch_current = gen_patch
+                        tile.decay_step = 0
+                        tile.last_decay_at = now
 
-                        tiles.append(
-                            Tile(
-                                bbox=gb,
-                                patch_original=patch.copy(),
-                                patch_current=patch,
-                                decay_step=0,
-                                last_decay_at=now,
-                            )
-                        )
-
-                        stamp_frozen_outline(acc_lines, gb, cfg)
-
-                        print(f"Inserted generated tile at capture {capture_count}")
+                        print(f"Replaced tile with generated image at capture {capture_count}")
 
                         next_gen_capture += gen_interval
-                        scene_changed = True
+
+                    tiles.append(tile)
+                    scene_changed = True
 
             any_decay = False
             for tile in tiles:
