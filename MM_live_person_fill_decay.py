@@ -83,7 +83,7 @@ class Config:
 
     GEN_START_INTERVAL: int = 12     # initial X
     GEN_INTERVAL_GROWTH: int = 6     # increase X by this amount
-    GEN_INTERVAL_STEP: int = 40      # every Y captures increase interval
+    GEN_INTERVAL_STEP: int = 10      # every Y captures increase interval default
 
 
 def clamp_box(b: Box, W: int, H: int) -> Box:
@@ -352,6 +352,7 @@ def main():
             tracks = [t for t in tracks if t.frozen or (now - t.last_seen_at) <= cfg.MISS_SECONDS]
 
             scene_changed = False
+            next_interval_bump = cfg.GEN_INTERVAL_STEP
             for t in tracks:
                 if t.frozen:
                     continue
@@ -374,21 +375,17 @@ def main():
                         last_decay_at=now,
                     )
                     tiles.append(tile)
-                    if len(tiles) % 10 == 0:
-                        print(f"Total stamps: {len(tiles)}")
                     capture_count += 1
-                    scene_changed = True
-                    # insert generated image occasionally
-                    if generated_imgs and capture_count >= next_gen_capture:
 
+                    if capture_count >= next_interval_bump:
+                        gen_interval += cfg.GEN_INTERVAL_GROWTH
+                        next_interval_bump += cfg.GEN_INTERVAL_STEP
+                        print(f"Generation interval increased to {gen_interval}")
+                    
+                    if generated_imgs and capture_count >= next_gen_capture:
                         rng = random.Random(capture_count)
 
-                        gw = rng.randint(W // 8, W // 3)
-                        gh = rng.randint(H // 8, H // 3)
-                        gx = rng.randint(0, max(1, W - gw))
-                        gy = rng.randint(0, max(1, H - gh))
-
-                        gb = quantize_box(Box(gx, gy, gx + gw, gy + gh), cfg.Q)
+                        gb = qb
 
                         patch = random_nature_patch(generated_imgs, gb.w, gb.h, rng)
                         patch.putalpha(cfg.BOX_ALPHA)
@@ -403,10 +400,12 @@ def main():
                             )
                         )
 
+                        stamp_frozen_outline(acc_lines, gb, cfg)
+
+                        print(f"Inserted generated tile at capture {capture_count}")
+
                         next_gen_capture += gen_interval
                         scene_changed = True
-                if capture_count % cfg.GEN_INTERVAL_STEP == 0:
-                    gen_interval += cfg.GEN_INTERVAL_GROWTH
 
             any_decay = False
             for tile in tiles:
