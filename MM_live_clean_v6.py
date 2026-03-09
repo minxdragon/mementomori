@@ -34,10 +34,10 @@ class Config:
     Q:int=16
     CONF:float=0.25
     DETECT_EVERY:int=6
-    SMOOTH_T:float=0.25
-    LIVE_SECONDS:float=4.0
-    MISS_SECONDS:float=0.8
-    IOU_THRESH:float=0.20
+    SMOOTH_T:float=0.4 #how smooth the live box movement is (0-1)
+    LIVE_SECONDS:float=1.0 #how long before stamping
+    MISS_SECONDS:float=1.2 #how forgiving to temporary detection misses
+    IOU_THRESH:float=0.12 #How strict the match is between old box and new box
     PURPLE_BGRA:Tuple[int,int,int,int]=(255,0,255,255)
     GREEN_BGRA:Tuple[int,int,int,int]=(0,255,0,255)
     LIVE_THICK:int=3
