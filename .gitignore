@@ -12,3 +12,6 @@ PngToSvg
 Human-Segmentation-PyTorch
 yolov5s.pt
 Human-Segmentation-PyTorch
+*.pt
+*.pt
+yolov5n.pt
