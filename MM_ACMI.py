@@ -46,6 +46,7 @@ class Tile:
     bbox: Box
     patch_original: Image.Image
     patch_current: Image.Image
+    created_at: float
     decay_step: int = 0
     last_decay_at: float = 0.0
 
@@ -70,6 +71,10 @@ class Config:
     BOX_ALPHA: int = 235
     BOX_DECAY_INTERVAL: float = 5.0
     BOX_DECAY_FACTORS: Tuple[int, ...] = (1, 2, 4, 8, 12, 16)
+    
+    TILE_FADE_START: float = 8.0       # seconds before fading starts
+    TILE_FADE_DURATION: float = 20.0   # how long it takes to fade down
+    TILE_MIN_ALPHA: float = 0.18       # old tiles never fully vanish
 
     SAVE_INTERVAL: float = 1.5
     SAVE_NUMBERED_FRAMES: bool = True
@@ -223,6 +228,20 @@ def pixelate_patch(patch: Image.Image, factor: int) -> Image.Image:
     small = patch.resize((sw, sh), Image.Resampling.BILINEAR)
     return small.resize((w, h), Image.Resampling.NEAREST)
 
+def apply_alpha_scale(patch: Image.Image, alpha_scale: float) -> Image.Image:
+    alpha_scale = max(0.0, min(1.0, alpha_scale))
+    out = patch.copy()
+    arr = np.array(out)
+    arr[:, :, 3] = (arr[:, :, 3].astype(np.float32) * alpha_scale).clip(0, 255).astype(np.uint8)
+    return Image.fromarray(arr, "RGBA")
+
+def age_fade_alpha(tile: Tile, now: float, cfg: Config) -> float:
+    age = now - tile.created_at
+    if age <= cfg.TILE_FADE_START:
+        return 1.0
+    t = (age - cfg.TILE_FADE_START) / cfg.TILE_FADE_DURATION
+    t = max(0.0, min(1.0, t))
+    return 1.0 - t * (1.0 - cfg.TILE_MIN_ALPHA)
 
 def maybe_decay_tile(tile: Tile, now: float, cfg: Config) -> bool:
     if now - tile.last_decay_at < cfg.BOX_DECAY_INTERVAL:
@@ -237,10 +256,15 @@ def maybe_decay_tile(tile: Tile, now: float, cfg: Config) -> bool:
     return True
 
 
-def composite_fill(fill_size: Tuple[int, int], tiles: List[Tile]) -> Image.Image:
+def composite_fill(fill_size: Tuple[int, int], tiles: List[Tile], now: float, cfg: Config) -> Image.Image:
     canvas = Image.new("RGBA", fill_size, (0, 0, 0, 0))
-    for tile in tiles:
-        canvas.alpha_composite(tile.patch_current, (tile.bbox.x1, tile.bbox.y1))
+
+    # oldest first, newest last, so new stamps sit on top
+    for tile in sorted(tiles, key=lambda t: t.created_at):
+        alpha_scale = age_fade_alpha(tile, now, cfg)
+        faded_patch = apply_alpha_scale(tile.patch_current, alpha_scale)
+        canvas.alpha_composite(faded_patch, (tile.bbox.x1, tile.bbox.y1))
+
     return canvas
 
 
@@ -371,6 +395,7 @@ def main():
                         bbox=qb,
                         patch_original=patch.copy(),
                         patch_current=patch,
+                        created_at=now,
                         decay_step=0,
                         last_decay_at=now,
                     )
@@ -406,7 +431,7 @@ def main():
                     any_decay = True
 
             if scene_changed or any_decay:
-                acc_fill = composite_fill((W, H), tiles)
+                acc_fill = composite_fill((W, H), tiles, now, cfg)
 
             live_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             draw_live_tracks(live_layer, tracks, cfg)
