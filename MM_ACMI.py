@@ -72,9 +72,9 @@ class Config:
     BOX_DECAY_INTERVAL: float = 5.0
     BOX_DECAY_FACTORS: Tuple[int, ...] = (1, 2, 4, 8, 12, 16)
     
-    TILE_FADE_START: float = 8.0       # seconds before fading starts
-    TILE_FADE_DURATION: float = 20.0   # how long it takes to fade down
-    TILE_MIN_ALPHA: float = 0.18       # old tiles never fully vanish
+    TILE_FADE_START: float = 0.5
+    TILE_FADE_DURATION: float = 4.0
+    TILE_MIN_ALPHA: float = 0.04
 
     SAVE_INTERVAL: float = 1.5
     SAVE_NUMBERED_FRAMES: bool = True
@@ -235,10 +235,13 @@ def apply_alpha_scale(patch: Image.Image, alpha_scale: float) -> Image.Image:
     arr[:, :, 3] = (arr[:, :, 3].astype(np.float32) * alpha_scale).clip(0, 255).astype(np.uint8)
     return Image.fromarray(arr, "RGBA")
 
+
 def age_fade_alpha(tile: Tile, now: float, cfg: Config) -> float:
     age = now - tile.created_at
+
     if age <= cfg.TILE_FADE_START:
         return 1.0
+
     t = (age - cfg.TILE_FADE_START) / cfg.TILE_FADE_DURATION
     t = max(0.0, min(1.0, t))
     return 1.0 - t * (1.0 - cfg.TILE_MIN_ALPHA)
@@ -259,7 +262,7 @@ def maybe_decay_tile(tile: Tile, now: float, cfg: Config) -> bool:
 def composite_fill(fill_size: Tuple[int, int], tiles: List[Tile], now: float, cfg: Config) -> Image.Image:
     canvas = Image.new("RGBA", fill_size, (0, 0, 0, 0))
 
-    # oldest first, newest last, so new stamps sit on top
+    # oldest first, newest last, so fresh stamps sit on top
     for tile in sorted(tiles, key=lambda t: t.created_at):
         alpha_scale = age_fade_alpha(tile, now, cfg)
         faded_patch = apply_alpha_scale(tile.patch_current, alpha_scale)
@@ -313,7 +316,7 @@ def main():
     frame_idx = 0
     saved_idx = 0
     last_save_at = 0.0
-
+    next_interval_bump = cfg.GEN_INTERVAL_STEP
     try:
         while True:
             ok, frame = cap.read()
@@ -376,7 +379,7 @@ def main():
             tracks = [t for t in tracks if t.frozen or (now - t.last_seen_at) <= cfg.MISS_SECONDS]
 
             scene_changed = False
-            next_interval_bump = cfg.GEN_INTERVAL_STEP
+            
             for t in tracks:
                 if t.frozen:
                     continue
@@ -415,6 +418,7 @@ def main():
 
                         tile.patch_original = gen_patch.copy()
                         tile.patch_current = gen_patch
+                        tile.created_at = now
                         tile.decay_step = 0
                         tile.last_decay_at = now
 
@@ -430,8 +434,7 @@ def main():
                 if maybe_decay_tile(tile, now, cfg):
                     any_decay = True
 
-            if scene_changed or any_decay:
-                acc_fill = composite_fill((W, H), tiles, now, cfg)
+            acc_fill = composite_fill((W, H), tiles, now, cfg)
 
             live_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             draw_live_tracks(live_layer, tracks, cfg)
