@@ -147,7 +147,7 @@ def process_image(img_path: Path):
 
     h, w = img.shape[:2]
     mask = leaf_mask(img)
-    bbox = biggest_blob_bbox(mask, min_area=500)
+    bbox = biggest_blob_bbox(mask, min_area=2000)
 
     debug = img.copy()
 
