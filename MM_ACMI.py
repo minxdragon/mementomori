@@ -308,7 +308,6 @@ def main():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         raise RuntimeError("Could not open webcam")
-
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     model = torch.hub.load("ultralytics/yolov5", cfg.MODEL_NAME)
     model.to(device)
@@ -331,176 +330,183 @@ def main():
     gen_interval = cfg.GEN_START_INTERVAL
     next_gen_capture = gen_interval
 
-    WIN = "mementomori_person_fill_decay"
-    cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
+    WIN = "memento_mori"
+    cv2.namedWindow(WIN, cv2.WND_PROP_FULLSCREEN)
     cv2.setWindowProperty(WIN, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    cv2.moveWindow(WIN, 0, 0)
+    cv2.resizeWindow(WIN, 1920, 1080)
 
     frame_idx = 0
     saved_idx = 0
     last_save_at = 0.0
     next_interval_bump = cfg.GEN_INTERVAL_STEP
+
     try:
         while True:
-            ok, frame = cap.read()
-            frame = cv2.flip(frame, 1)   # horizontal mirror
-            if not ok:
-                time.sleep(0.02)
-                continue
-
-            now = time.time()
-            H, W = frame.shape[:2]
-
-            if acc_lines is None or acc_fill is None or acc_lines.size != (W, H) or acc_fill.size != (W, H):
-                acc_lines = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-                acc_fill = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-
-                tracks.clear()
-                next_id = 1
-                frozen_keys.clear()
-                tiles.clear()
-                fresh_stamps.clear()
-
-            detections = []
-            if frame_idx % cfg.DETECT_EVERY == 0:
-                if cfg.DETECT_SCALE != 1.0:
-                    small = cv2.resize(frame, (0, 0), fx=cfg.DETECT_SCALE, fy=cfg.DETECT_SCALE)
-                    results = model(small)
-                    persons = results.xyxy[0].cpu().numpy()
-                    if len(persons) > 0:
-                        persons[:, 0:4] /= cfg.DETECT_SCALE
-                else:
-                    results = model(frame)
-                    persons = results.xyxy[0].cpu().numpy()
-                detections = boxes_from_yolo_xyxy(persons, W, H, cfg.CONF)
-
-            unmatched = set(range(len(detections)))
-            live_idx = [i for i, t in enumerate(tracks) if not t.frozen]
-            used = set()
-
-            for di, det in enumerate(detections):
-                best_i = -1
-                best_s = 0.0
-                for ti in live_idx:
-                    if ti in used:
-                        continue
-                    s = iou(det, tracks[ti].bbox)
-                    if s > best_s:
-                        best_s = s
-                        best_i = ti
-                if best_i >= 0 and best_s >= cfg.IOU_THRESH:
-                    t = tracks[best_i]
-                    tracks[best_i].bbox = lerp_box(t.bbox, det, cfg.SMOOTH_T)
-                    tracks[best_i].last_seen_at = now
-                    used.add(best_i)
-                    unmatched.discard(di)
-
-            for di in sorted(unmatched):
-                det = detections[di]
-                tracks.append(Track(next_id, det, now, now))
-                next_id += 1
-
-            tracks = [t for t in tracks if t.frozen or (now - t.last_seen_at) <= cfg.MISS_SECONDS]
-
-            scene_changed = False
-            
-            for t in tracks:
-                if t.frozen:
+                ok, frame = cap.read()
+                frame = cv2.flip(frame, 1)   # horizontal mirror
+                if not ok:
+                    time.sleep(0.02)
                     continue
-                if (now - t.created_at) >= cfg.LIVE_SECONDS:
-                    t.frozen = True
-                    qb = quantize_box(clamp_box(t.bbox, W, H), cfg.Q)
-                    k = geom_key(qb)
-                    if qb.area <= 0 or k in frozen_keys:
+
+                now = time.time()
+                H, W = frame.shape[:2]
+
+                if acc_lines is None or acc_fill is None or acc_lines.size != (W, H) or acc_fill.size != (W, H):
+                    acc_lines = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+                    acc_fill = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+
+                    tracks.clear()
+                    next_id = 1
+                    frozen_keys.clear()
+                    tiles.clear()
+                    fresh_stamps.clear()
+
+                detections = []
+                if frame_idx % cfg.DETECT_EVERY == 0:
+                    if cfg.DETECT_SCALE != 1.0:
+                        small = cv2.resize(frame, (0, 0), fx=cfg.DETECT_SCALE, fy=cfg.DETECT_SCALE)
+                        results = model(small)
+                        persons = results.xyxy[0].cpu().numpy()
+                        if len(persons) > 0:
+                            persons[:, 0:4] /= cfg.DETECT_SCALE
+                    else:
+                        results = model(frame)
+                        persons = results.xyxy[0].cpu().numpy()
+                    detections = boxes_from_yolo_xyxy(persons, W, H, cfg.CONF)
+
+                unmatched = set(range(len(detections)))
+                live_idx = [i for i, t in enumerate(tracks) if not t.frozen]
+                used = set()
+
+                for di, det in enumerate(detections):
+                    best_i = -1
+                    best_s = 0.0
+                    for ti in live_idx:
+                        if ti in used:
+                            continue
+                        s = iou(det, tracks[ti].bbox)
+                        if s > best_s:
+                            best_s = s
+                            best_i = ti
+                    if best_i >= 0 and best_s >= cfg.IOU_THRESH:
+                        t = tracks[best_i]
+                        tracks[best_i].bbox = lerp_box(t.bbox, det, cfg.SMOOTH_T)
+                        tracks[best_i].last_seen_at = now
+                        used.add(best_i)
+                        unmatched.discard(di)
+
+                for di in sorted(unmatched):
+                    det = detections[di]
+                    tracks.append(Track(next_id, det, now, now))
+                    next_id += 1
+
+                tracks = [t for t in tracks if t.frozen or (now - t.last_seen_at) <= cfg.MISS_SECONDS]
+
+                scene_changed = False
+                
+                for t in tracks:
+                    if t.frozen:
                         continue
+                    if (now - t.created_at) >= cfg.LIVE_SECONDS:
+                        t.frozen = True
+                        qb = quantize_box(clamp_box(t.bbox, W, H), cfg.Q)
+                        k = geom_key(qb)
+                        if qb.area <= 0 or k in frozen_keys:
+                            continue
 
-                    frozen_keys.add(k)
-                    stamp_frozen_outline(acc_lines, qb, cfg)
+                        frozen_keys.add(k)
+                        stamp_frozen_outline(acc_lines, qb, cfg)
 
-                    patch = make_patch_for_box(qb, nature_imgs, cfg.BOX_ALPHA, "box")
-                    fresh_patch = patch.copy()
-                    fresh_patch.putalpha(cfg.FRESH_STAMP_ALPHA)
-                    tile = Tile(
-                        bbox=qb,
-                        patch_original=patch.copy(),
-                        patch_current=patch,
-                        created_at=now,
-                        decay_step=0,
-                        last_decay_at=now,
-                    )
-
-                    capture_count += 1
-
-                    if capture_count >= next_interval_bump:
-                        gen_interval += cfg.GEN_INTERVAL_GROWTH
-                        next_interval_bump += cfg.GEN_INTERVAL_STEP
-                        print(f"Generation interval increased to {gen_interval}")
-
-                    if generated_imgs and capture_count >= next_gen_capture:
-                        rng = random.Random(capture_count)
-
-                        gen_patch = random_nature_patch(generated_imgs, qb.w, qb.h, rng)
-                        gen_patch.putalpha(cfg.BOX_ALPHA)
-                        fresh_patch = gen_patch.copy()
+                        patch = make_patch_for_box(qb, nature_imgs, cfg.BOX_ALPHA, "box")
+                        fresh_patch = patch.copy()
                         fresh_patch.putalpha(cfg.FRESH_STAMP_ALPHA)
+                        tile = Tile(
+                            bbox=qb,
+                            patch_original=patch.copy(),
+                            patch_current=patch,
+                            created_at=now,
+                            decay_step=0,
+                            last_decay_at=now,
+                        )
 
-                        tile.patch_original = gen_patch.copy()
-                        tile.patch_current = gen_patch
-                        tile.created_at = now
-                        tile.decay_step = 0
-                        tile.last_decay_at = now
+                        capture_count += 1
 
-                        print(f"Replaced tile with generated image at capture {capture_count}")
+                        if capture_count >= next_interval_bump:
+                            gen_interval += cfg.GEN_INTERVAL_GROWTH
+                            next_interval_bump += cfg.GEN_INTERVAL_STEP
+                            print(f"Generation interval increased to {gen_interval}")
 
-                        next_gen_capture += gen_interval
+                        if generated_imgs and capture_count >= next_gen_capture:
+                            rng = random.Random(capture_count)
 
-                    tiles.append(tile)
-                    fresh_stamps.append(FreshStamp(
-                        bbox=qb,
-                        patch=fresh_patch,
-                        created_at=now,
-                    ))
-                    scene_changed = True
+                            gen_patch = random_nature_patch(generated_imgs, qb.w, qb.h, rng)
+                            gen_patch.putalpha(cfg.BOX_ALPHA)
+                            fresh_patch = gen_patch.copy()
+                            fresh_patch.putalpha(cfg.FRESH_STAMP_ALPHA)
 
-            any_decay = False
-            for tile in tiles:
-                if maybe_decay_tile(tile, now, cfg):
-                    any_decay = True
+                            tile.patch_original = gen_patch.copy()
+                            tile.patch_current = gen_patch
+                            tile.created_at = now
+                            tile.decay_step = 0
+                            tile.last_decay_at = now
 
-            acc_fill = composite_fill((W, H), tiles)
+                            print(f"Replaced tile with generated image at capture {capture_count}")
 
-            live_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            draw_live_tracks(live_layer, tracks, cfg)
-            
-            fresh_stamps = [
-                s for s in fresh_stamps
-                if (now - s.created_at) < cfg.FRESH_STAMP_DURATION
-            ]
+                            next_gen_capture += gen_interval
 
-            fresh_layer = composite_fresh_stamps((W, H), fresh_stamps, now, cfg)
+                        tiles.append(tile)
+                        fresh_stamps.append(FreshStamp(
+                            bbox=qb,
+                            patch=fresh_patch,
+                            created_at=now,
+                        ))
+                        scene_changed = True
 
-            out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            out.alpha_composite(acc_fill)
-            out.alpha_composite(acc_lines)
-            out.alpha_composite(fresh_layer)
-            out.alpha_composite(live_layer)
+                any_decay = False
+                for tile in tiles:
+                    if maybe_decay_tile(tile, now, cfg):
+                        any_decay = True
 
-            cv2.imshow(WIN, pil_rgba_to_bgr(out))
+                acc_fill = composite_fill((W, H), tiles)
 
-            if (now - last_save_at) >= cfg.SAVE_INTERVAL:
-                last_save_at = now
-                tmp = latest_path.with_suffix(".tmp.png")
-                out.save(tmp)
-                os.replace(tmp, latest_path)
-                if cfg.SAVE_NUMBERED_FRAMES:
-                    frame_path = output_dir / f"fixed_{saved_idx:06d}.png"
-                    out.save(frame_path)
-                    saved_idx += 1
+                live_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+                draw_live_tracks(live_layer, tracks, cfg)
+                
+                fresh_stamps = [
+                    s for s in fresh_stamps
+                    if (now - s.created_at) < cfg.FRESH_STAMP_DURATION
+                ]
 
-            frame_idx += 1
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q") or key == 27:
-                break
+                fresh_layer = composite_fresh_stamps((W, H), fresh_stamps, now, cfg)
 
+                out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+                out.alpha_composite(acc_fill)
+                out.alpha_composite(acc_lines)
+                out.alpha_composite(fresh_layer)
+                out.alpha_composite(live_layer)
+                
+                display_bgr = pil_rgba_to_bgr(out)
+                display_bgr = cv2.resize(display_bgr, (1920, 1080), interpolation=cv2.INTER_LINEAR)
+                cv2.imshow(WIN, display_bgr)
+                # print("actual capture:",
+                # int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                # int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+
+                if (now - last_save_at) >= cfg.SAVE_INTERVAL:
+                    last_save_at = now
+                    tmp = latest_path.with_suffix(".tmp.png")
+                    out.save(tmp)
+                    os.replace(tmp, latest_path)
+                    if cfg.SAVE_NUMBERED_FRAMES:
+                        frame_path = output_dir / f"fixed_{saved_idx:06d}.png"
+                        out.save(frame_path)
+                        saved_idx += 1
+
+                frame_idx += 1
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("q") or key == 27:
+                    break
     finally:
         print(f"Final stamp count: {len(tiles)}")
         cap.release()
