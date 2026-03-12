@@ -50,6 +50,11 @@ class Tile:
     decay_step: int = 0
     last_decay_at: float = 0.0
 
+@dataclass
+class FreshStamp:
+    bbox: Box
+    patch: Image.Image
+    created_at: float
 
 @dataclass
 class Config:
@@ -75,6 +80,9 @@ class Config:
     TILE_FADE_START: float = 0.5
     TILE_FADE_DURATION: float = 4.0
     TILE_MIN_ALPHA: float = 0.04
+
+    FRESH_STAMP_DURATION: float = 4.0
+    FRESH_STAMP_ALPHA: int = 255
 
     SAVE_INTERVAL: float = 1.5
     SAVE_NUMBERED_FRAMES: bool = True
@@ -228,24 +236,6 @@ def pixelate_patch(patch: Image.Image, factor: int) -> Image.Image:
     small = patch.resize((sw, sh), Image.Resampling.BILINEAR)
     return small.resize((w, h), Image.Resampling.NEAREST)
 
-def apply_alpha_scale(patch: Image.Image, alpha_scale: float) -> Image.Image:
-    alpha_scale = max(0.0, min(1.0, alpha_scale))
-    out = patch.copy()
-    arr = np.array(out)
-    arr[:, :, 3] = (arr[:, :, 3].astype(np.float32) * alpha_scale).clip(0, 255).astype(np.uint8)
-    return Image.fromarray(arr, "RGBA")
-
-
-def age_fade_alpha(tile: Tile, now: float, cfg: Config) -> float:
-    age = now - tile.created_at
-
-    if age <= cfg.TILE_FADE_START:
-        return 1.0
-
-    t = (age - cfg.TILE_FADE_START) / cfg.TILE_FADE_DURATION
-    t = max(0.0, min(1.0, t))
-    return 1.0 - t * (1.0 - cfg.TILE_MIN_ALPHA)
-
 def maybe_decay_tile(tile: Tile, now: float, cfg: Config) -> bool:
     if now - tile.last_decay_at < cfg.BOX_DECAY_INTERVAL:
         return False
@@ -259,17 +249,47 @@ def maybe_decay_tile(tile: Tile, now: float, cfg: Config) -> bool:
     return True
 
 
-def composite_fill(fill_size: Tuple[int, int], tiles: List[Tile], now: float, cfg: Config) -> Image.Image:
+def composite_fill(fill_size: Tuple[int, int], tiles: List[Tile]) -> Image.Image:
     canvas = Image.new("RGBA", fill_size, (0, 0, 0, 0))
 
-    # oldest first, newest last, so fresh stamps sit on top
-    for tile in sorted(tiles, key=lambda t: t.created_at):
-        alpha_scale = age_fade_alpha(tile, now, cfg)
-        faded_patch = apply_alpha_scale(tile.patch_current, alpha_scale)
-        canvas.alpha_composite(faded_patch, (tile.bbox.x1, tile.bbox.y1))
+    for tile in tiles:
+        canvas.alpha_composite(tile.patch_current, (tile.bbox.x1, tile.bbox.y1))
 
     return canvas
 
+def fresh_stamp_alpha(stamp: FreshStamp, now: float, cfg: Config) -> float:
+    age = now - stamp.created_at
+    if age <= 0:
+        return 1.0
+    t = min(1.0, age / cfg.FRESH_STAMP_DURATION)
+    return 1.0 - t
+
+
+def composite_fresh_stamps(
+    size: Tuple[int, int],
+    fresh_stamps: List[FreshStamp],
+    now: float,
+    cfg: Config
+) -> Image.Image:
+    layer = Image.new("RGBA", size, (0, 0, 0, 0))
+
+    for stamp in fresh_stamps:
+        a = fresh_stamp_alpha(stamp, now, cfg)
+        if a <= 0:
+            continue
+
+        patch = stamp.patch.copy()
+        arr = np.array(patch)
+        arr[:, :, 3] = (arr[:, :, 3].astype(np.float32) * a).clip(0, 255).astype(np.uint8)
+        patch = Image.fromarray(arr, "RGBA")
+
+        layer.alpha_composite(patch, (stamp.bbox.x1, stamp.bbox.y1))
+
+        outline_alpha = int(255 * a)
+        draw_rect_rgba(layer, stamp.bbox, (0, 255, 0, outline_alpha), cfg.FROZEN_THICK_OUTER)
+        draw_rect_rgba(layer, stamp.bbox, (0, 255, 0, outline_alpha), cfg.FROZEN_THICK_INNER)
+
+    return layer
 
 def main():
     cfg = Config()
@@ -282,6 +302,8 @@ def main():
     output_dir = base_dir / "frames_person_fill_decay"
     output_dir.mkdir(parents=True, exist_ok=True)
     latest_path = base_dir / "latest_person_fill_decay.png"
+    tiles: List[Tile] = []
+    fresh_stamps: List[FreshStamp] = []
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -336,6 +358,7 @@ def main():
                 next_id = 1
                 frozen_keys.clear()
                 tiles.clear()
+                fresh_stamps.clear()
 
             detections = []
             if frame_idx % cfg.DETECT_EVERY == 0:
@@ -394,6 +417,8 @@ def main():
                     stamp_frozen_outline(acc_lines, qb, cfg)
 
                     patch = make_patch_for_box(qb, nature_imgs, cfg.BOX_ALPHA, "box")
+                    fresh_patch = patch.copy()
+                    fresh_patch.putalpha(cfg.FRESH_STAMP_ALPHA)
                     tile = Tile(
                         bbox=qb,
                         patch_original=patch.copy(),
@@ -415,6 +440,8 @@ def main():
 
                         gen_patch = random_nature_patch(generated_imgs, qb.w, qb.h, rng)
                         gen_patch.putalpha(cfg.BOX_ALPHA)
+                        fresh_patch = gen_patch.copy()
+                        fresh_patch.putalpha(cfg.FRESH_STAMP_ALPHA)
 
                         tile.patch_original = gen_patch.copy()
                         tile.patch_current = gen_patch
@@ -427,6 +454,11 @@ def main():
                         next_gen_capture += gen_interval
 
                     tiles.append(tile)
+                    fresh_stamps.append(FreshStamp(
+                        bbox=qb,
+                        patch=fresh_patch,
+                        created_at=now,
+                    ))
                     scene_changed = True
 
             any_decay = False
@@ -434,14 +466,22 @@ def main():
                 if maybe_decay_tile(tile, now, cfg):
                     any_decay = True
 
-            acc_fill = composite_fill((W, H), tiles, now, cfg)
+            acc_fill = composite_fill((W, H), tiles)
 
             live_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             draw_live_tracks(live_layer, tracks, cfg)
+            
+            fresh_stamps = [
+                s for s in fresh_stamps
+                if (now - s.created_at) < cfg.FRESH_STAMP_DURATION
+            ]
+
+            fresh_layer = composite_fresh_stamps((W, H), fresh_stamps, now, cfg)
 
             out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             out.alpha_composite(acc_fill)
             out.alpha_composite(acc_lines)
+            out.alpha_composite(fresh_layer)
             out.alpha_composite(live_layer)
 
             cv2.imshow(WIN, pil_rgba_to_bgr(out))
