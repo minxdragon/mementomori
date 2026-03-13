@@ -63,7 +63,7 @@ class Config:
     DETECT_EVERY: int = 4
     DETECT_SCALE: float = 0.5
     SMOOTH_T: float = 0.40
-    LIVE_SECONDS: float = 0.9
+    LIVE_SECONDS: float = 3
     MISS_SECONDS: float = 1.2
     IOU_THRESH: float = 0.12
 
@@ -299,7 +299,7 @@ def main():
     nature_imgs = load_nature_images(base_dir / "nature")
     generated_imgs = load_nature_images(base_dir / cfg.GENERATED_DIR)
 
-    output_dir = base_dir / "frames_person_fill_decay"
+    output_dir = base_dir / "ACMI_frames"
     output_dir.mkdir(parents=True, exist_ok=True)
     latest_path = base_dir / "ACMI.png"
     tiles: List[Tile] = []
