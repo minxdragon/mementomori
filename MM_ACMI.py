@@ -301,7 +301,7 @@ def main():
 
     output_dir = base_dir / "frames_person_fill_decay"
     output_dir.mkdir(parents=True, exist_ok=True)
-    latest_path = base_dir / "latest_person_fill_decay.png"
+    latest_path = base_dir / "ACMI.png"
     tiles: List[Tile] = []
     fresh_stamps: List[FreshStamp] = []
 
@@ -499,7 +499,7 @@ def main():
                     out.save(tmp)
                     os.replace(tmp, latest_path)
                     if cfg.SAVE_NUMBERED_FRAMES:
-                        frame_path = output_dir / f"fixed_{saved_idx:06d}.png"
+                        frame_path = output_dir / f"ACMI_{saved_idx:06d}.png"
                         out.save(frame_path)
                         saved_idx += 1
 
