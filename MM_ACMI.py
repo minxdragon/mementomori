@@ -85,6 +85,8 @@ class Config:
 
     FRESH_STAMP_DURATION: float = 8.0
     FRESH_STAMP_ALPHA: int = 255
+    MAX_FRESH_STAMPS: int = 200  # maximum number of fresh stamps to keep in memory
+    MAX_TILES: int = 300  # maximum number of tile objects to keep in memory
 
     SAVE_INTERVAL: float = 1.5
     SAVE_NUMBERED_FRAMES: bool = True
@@ -288,6 +290,36 @@ def composite_fill(fill_size: Tuple[int, int], tiles: List[Tile]) -> Image.Image
         print(f"Error in composite_fill: {e}")
         return Image.new("RGBA", fill_size, (0, 0, 0, 0))
 
+
+def prune_tiles_fresh_stamps(tiles: List[Tile], fresh_stamps: List[FreshStamp], frozen_outlines: List[Tuple[Box, float]], acc_lines: Image.Image, cfg: Config) -> Image.Image:
+    if len(tiles) > cfg.MAX_TILES:
+        tiles.sort(key=lambda t: t.created_at)
+        remove_count = len(tiles) - cfg.MAX_TILES
+        if remove_count > 0:
+            del tiles[:remove_count]
+            print(f"Pruned {remove_count} oldest tiles")
+
+    if len(fresh_stamps) > cfg.MAX_FRESH_STAMPS:
+        fresh_stamps.sort(key=lambda s: s.created_at)
+        remove_count = len(fresh_stamps) - cfg.MAX_FRESH_STAMPS
+        if remove_count > 0:
+            del fresh_stamps[:remove_count]
+            print(f"Pruned {remove_count} oldest fresh stamps")
+
+    if len(frozen_outlines) > cfg.MAX_TILES:
+        frozen_outlines.sort(key=lambda f: f[1])
+        remove_count = len(frozen_outlines) - cfg.MAX_TILES
+        if remove_count > 0:
+            del frozen_outlines[:remove_count]
+            print(f"Pruned {remove_count} oldest outlines")
+            # rebuild outlines layer
+            acc_lines = Image.new("RGBA", acc_lines.size, (0, 0, 0, 0))
+            for outline_box, _ in frozen_outlines:
+                stamp_frozen_outline(acc_lines, outline_box, cfg)
+
+    return acc_lines
+
+
 def fresh_stamp_alpha(stamp: FreshStamp, now: float, cfg: Config) -> float:
     age = now - stamp.created_at
     if age <= 0:
@@ -336,6 +368,7 @@ def main():
     latest_path = base_dir / "ACMI.png"
     tiles: List[Tile] = []
     fresh_stamps: List[FreshStamp] = []
+    frozen_outlines: List[Tuple[Box, float]] = []
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -536,6 +569,7 @@ def main():
                             continue
 
                         frozen_keys.add(k)
+                        frozen_outlines.append((qb, now))
                         stamp_frozen_outline(acc_lines, qb, cfg)
 
                         patch = make_patch_for_box(qb, nature_imgs, cfg.BOX_ALPHA, "box", used_nature_imgs)
@@ -584,6 +618,10 @@ def main():
                             patch=fresh_patch,
                             created_at=now,
                         ))
+
+                        # Cap number of tiles + fresh stamps + outlines, deleting oldest when exceeded
+                        acc_lines = prune_tiles_fresh_stamps(tiles, fresh_stamps, frozen_outlines, acc_lines, cfg)
+
                         scene_changed = True
 
                 any_decay = False
@@ -600,6 +638,8 @@ def main():
                     s for s in fresh_stamps
                     if (now - s.created_at) < cfg.FRESH_STAMP_DURATION
                 ]
+
+                acc_lines = prune_tiles_fresh_stamps(tiles, fresh_stamps, frozen_outlines, acc_lines, cfg)
 
                 fresh_layer = composite_fresh_stamps((W, H), fresh_stamps, now, cfg)
 
