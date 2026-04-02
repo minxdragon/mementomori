@@ -2,9 +2,10 @@ import os
 import time
 import random
 import hashlib
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Deque, List, Optional, Tuple
 from ultralytics import YOLO
 
 import cv2
@@ -79,14 +80,15 @@ class Config:
     BOX_DECAY_INTERVAL: float = 5.0
     BOX_DECAY_FACTORS: Tuple[int, ...] = (1, 2, 4, 8, 12, 16)
     
-    TILE_FADE_START: float = 4.0
-    TILE_FADE_DURATION: float = 4.0
+    TILE_FADE_START: float = 6.0 #how long after freezing to start fading tiles, increase to keep them sharper longer, decrease to start fading sooner default 4.0
+    TILE_FADE_DURATION: float = 4.0 #how long the fade lasts. defult 4.0. add to TILE_FADE_START to determine when tiles reach TILE_MIN_ALPHA
     TILE_MIN_ALPHA: float = 0.04
 
     FRESH_STAMP_DURATION: float = 8.0
     FRESH_STAMP_ALPHA: int = 255
-    MAX_FRESH_STAMPS: int = 200  # maximum number of fresh stamps to keep in memory
-    MAX_TILES: int = 300  # maximum number of tile objects to keep in memory
+    MAX_FRESH_STAMPS: int = 100  # maximum number of fresh stamps to keep in memory
+    MAX_TILES: int = 200  # maximum number of tile objects to keep in memory
+    PRUNE_EVERY_FRAMES: int = 8  # perform prune logic once every N frames
 
     SAVE_INTERVAL: float = 1.5
     SAVE_NUMBERED_FRAMES: bool = True
@@ -275,7 +277,7 @@ def maybe_decay_tile(tile: Tile, now: float, cfg: Config) -> bool:
         return False
 
 
-def composite_fill(fill_size: Tuple[int, int], tiles: List[Tile]) -> Image.Image:
+def composite_fill(fill_size: Tuple[int, int], tiles: Deque[Tile]) -> Image.Image:
     try:
         canvas = Image.new("RGBA", fill_size, (0, 0, 0, 0))
 
@@ -291,31 +293,30 @@ def composite_fill(fill_size: Tuple[int, int], tiles: List[Tile]) -> Image.Image
         return Image.new("RGBA", fill_size, (0, 0, 0, 0))
 
 
-def prune_tiles_fresh_stamps(tiles: List[Tile], fresh_stamps: List[FreshStamp], frozen_outlines: List[Tuple[Box, float]], acc_lines: Image.Image, cfg: Config) -> Image.Image:
+def prune_tiles_fresh_stamps(tiles: Deque[Tile], fresh_stamps: Deque[FreshStamp], frozen_outlines: Deque[Tuple[Box, float]], acc_lines: Image.Image, cfg: Config) -> Image.Image:
+    if len(tiles) <= cfg.MAX_TILES and len(fresh_stamps) <= cfg.MAX_FRESH_STAMPS and len(frozen_outlines) <= cfg.MAX_TILES:
+        return acc_lines
+
     if len(tiles) > cfg.MAX_TILES:
-        tiles.sort(key=lambda t: t.created_at)
         remove_count = len(tiles) - cfg.MAX_TILES
-        if remove_count > 0:
-            del tiles[:remove_count]
-            print(f"Pruned {remove_count} oldest tiles")
+        for _ in range(remove_count):
+            tiles.popleft()
+        print(f"Pruned {remove_count} oldest tiles")
 
     if len(fresh_stamps) > cfg.MAX_FRESH_STAMPS:
-        fresh_stamps.sort(key=lambda s: s.created_at)
         remove_count = len(fresh_stamps) - cfg.MAX_FRESH_STAMPS
-        if remove_count > 0:
-            del fresh_stamps[:remove_count]
-            print(f"Pruned {remove_count} oldest fresh stamps")
-
+        for _ in range(remove_count):
+            fresh_stamps.popleft()
+        print(f"Pruned {remove_count} oldest fresh stamps")
     if len(frozen_outlines) > cfg.MAX_TILES:
-        frozen_outlines.sort(key=lambda f: f[1])
         remove_count = len(frozen_outlines) - cfg.MAX_TILES
-        if remove_count > 0:
-            del frozen_outlines[:remove_count]
-            print(f"Pruned {remove_count} oldest outlines")
-            # rebuild outlines layer
-            acc_lines = Image.new("RGBA", acc_lines.size, (0, 0, 0, 0))
-            for outline_box, _ in frozen_outlines:
-                stamp_frozen_outline(acc_lines, outline_box, cfg)
+        for _ in range(remove_count):
+            frozen_outlines.popleft()
+        print(f"Pruned {remove_count} oldest outlines")
+
+        acc_lines = Image.new("RGBA", acc_lines.size, (0, 0, 0, 0))
+        for outline_box, _ in frozen_outlines:
+            stamp_frozen_outline(acc_lines, outline_box, cfg)
 
     return acc_lines
 
@@ -330,7 +331,7 @@ def fresh_stamp_alpha(stamp: FreshStamp, now: float, cfg: Config) -> float:
 
 def composite_fresh_stamps(
     size: Tuple[int, int],
-    fresh_stamps: List[FreshStamp],
+    fresh_stamps: Deque[FreshStamp],
     now: float,
     cfg: Config
 ) -> Image.Image:
@@ -366,9 +367,9 @@ def main():
     output_dir = base_dir / "ACMI_frames"
     output_dir.mkdir(parents=True, exist_ok=True)
     latest_path = base_dir / "ACMI.png"
-    tiles: List[Tile] = []
-    fresh_stamps: List[FreshStamp] = []
-    frozen_outlines: List[Tuple[Box, float]] = []
+    tiles: Deque[Tile] = deque()
+    fresh_stamps: Deque[FreshStamp] = deque()
+    frozen_outlines: Deque[Tuple[Box, float]] = deque()
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -389,7 +390,7 @@ def main():
 
     frozen_keys = set()
     frozen_yolo_ids = set()
-    tiles: List[Tile] = []
+    tiles: Deque[Tile] = deque()
     boxes = None
     used_nature_imgs = set()
     used_generated_imgs = set()
@@ -619,8 +620,9 @@ def main():
                             created_at=now,
                         ))
 
-                        # Cap number of tiles + fresh stamps + outlines, deleting oldest when exceeded
-                        acc_lines = prune_tiles_fresh_stamps(tiles, fresh_stamps, frozen_outlines, acc_lines, cfg)
+                        # Cap number of tiles + fresh stamps + outlines, deleting oldest when exceeded (periodic)
+                        if frame_idx % cfg.PRUNE_EVERY_FRAMES == 0:
+                            acc_lines = prune_tiles_fresh_stamps(tiles, fresh_stamps, frozen_outlines, acc_lines, cfg)
 
                         scene_changed = True
 
@@ -639,7 +641,8 @@ def main():
                     if (now - s.created_at) < cfg.FRESH_STAMP_DURATION
                 ]
 
-                acc_lines = prune_tiles_fresh_stamps(tiles, fresh_stamps, frozen_outlines, acc_lines, cfg)
+                if frame_idx % cfg.PRUNE_EVERY_FRAMES == 0:
+                    acc_lines = prune_tiles_fresh_stamps(tiles, fresh_stamps, frozen_outlines, acc_lines, cfg)
 
                 fresh_layer = composite_fresh_stamps((W, H), fresh_stamps, now, cfg)
 
