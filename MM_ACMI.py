@@ -49,7 +49,7 @@ class Tile:
     patch_original: Image.Image
     patch_current: Image.Image
     created_at: float
-    decay_step: int = 0
+    decay_step: float = 0.0
     last_decay_at: float = 0.0
 
 @dataclass
@@ -64,9 +64,9 @@ class Config:
     CONF: float = 0.25
     DETECT_EVERY: int = 4
     DETECT_SCALE: float = 0.5
-    SMOOTH_T: float = 0.40
-    LIVE_SECONDS: float = 3
-    MISS_SECONDS: float = 1.2
+    SMOOTH_T: float = 0.50 #how much to interpolate bbox movement. increase to make it smoother but more laggy, decrease to make it more responsive but more jittery defaults to 0.40 which is a good balance for 30fps video
+    LIVE_SECONDS: float = 4 #how long to keep a track as "live" before freezing it. increase to make it more forgiving of short occlusions, decrease to make it freeze faster
+    MISS_SECONDS: float = 1.4 #how long to keep "live" tracks around without seeing them again before forgetting them. increase to make it more forgiving of missed detections, decrease to make it more responsive to change
     IOU_THRESH: float = 0.12
 
     PURPLE_BGRA: Tuple[int, int, int, int] = (255, 0, 255, 255)
@@ -96,10 +96,10 @@ class Config:
 
     GENERATED_DIR: str = "generated"
 
-    GEN_START_INTERVAL: int = 12      # start rarer
-    GEN_INTERVAL_SHRINK: int = 2      # reduce interval by this amount
-    GEN_INTERVAL_STEP: int = 10       # every Y captures shrink interval
-    GEN_MIN_INTERVAL: int = 2         # never go below this
+    GEN_START_INTERVAL: int = 30      # start with a new generation every N captures
+    GEN_INTERVAL_SHRINK: int = 1      # reduce interval by this amount
+    GEN_INTERVAL_STEP: int = 30       # every Y captures shrink interval
+    GEN_MIN_INTERVAL: int = 1         # never go below this
 
 
 def clamp_box(b: Box, W: int, H: int) -> Box:
@@ -171,14 +171,28 @@ def load_nature_images(nature_dir: Path) -> List[Image.Image]:
     return imgs
 
 
-def random_nature_patch(nature_imgs: List[Image.Image], w: int, h: int, rng: random.Random) -> Image.Image:
+def random_nature_patch(nature_imgs: List[Image.Image], w: int, h: int, rng: random.Random, used_indices: set = None) -> Image.Image:
     if w <= 0 or h <= 0:
         return Image.new("RGBA", (max(1, w), max(1, h)), (0, 0, 0, 0))
     if not nature_imgs:
         arr = np.frombuffer(rng.randbytes(w * h), dtype=np.uint8).reshape((h, w))
         rgb = np.stack([arr, arr, arr], axis=2)
         return Image.fromarray(rgb, "RGB").convert("RGBA")
-    src = rng.choice(nature_imgs)
+    
+    # Track used images to ensure each appears only once
+    if used_indices is None:
+        used_indices = set()
+    
+    available_indices = [i for i in range(len(nature_imgs)) if i not in used_indices]
+    if not available_indices:
+        # Reset if all used
+        used_indices.clear()
+        available_indices = list(range(len(nature_imgs)))
+    
+    idx = rng.choice(available_indices)
+    used_indices.add(idx)
+    src = nature_imgs[idx]
+    
     sw, sh = src.size
     scale = max(w / sw, h / sh, 0.01)
     rw, rh = int(sw * scale + 0.5), int(sh * scale + 0.5)
@@ -223,42 +237,56 @@ def boxes_from_yolo_xyxy(persons_xyxy: np.ndarray, W: int, H: int, conf_thresh: 
     return out
 
 
-def make_patch_for_box(b: Box, nature_imgs: List[Image.Image], alpha: int, tag: str) -> Image.Image:
+def make_patch_for_box(b: Box, nature_imgs: List[Image.Image], alpha: int, tag: str, used_indices: set = None) -> Image.Image:
     rng = random.Random(seed_from_rect(tag, b))
-    patch = random_nature_patch(nature_imgs, b.w, b.h, rng)
+    patch = random_nature_patch(nature_imgs, b.w, b.h, rng, used_indices)
     patch.putalpha(alpha)
     return patch
 
 
-def pixelate_patch(patch: Image.Image, factor: int) -> Image.Image:
-    if factor <= 1:
+def pixelate_patch(patch: Image.Image, factor: float) -> Image.Image:
+    try:
+        if factor <= 1:
+            return patch.copy()
+        w, h = patch.size
+        sw = max(1, int(w // factor))
+        sh = max(1, int(h // factor))
+        small = patch.resize((sw, sh), Image.Resampling.BILINEAR)
+        return small.resize((w, h), Image.Resampling.NEAREST)
+    except Exception as e:
+        print(f"Error in pixelate_patch (factor={factor}, patch_size={patch.size}): {e}")
         return patch.copy()
-    w, h = patch.size
-    sw = max(1, w // factor)
-    sh = max(1, h // factor)
-    small = patch.resize((sw, sh), Image.Resampling.BILINEAR)
-    return small.resize((w, h), Image.Resampling.NEAREST)
 
 def maybe_decay_tile(tile: Tile, now: float, cfg: Config) -> bool:
-    if now - tile.last_decay_at < cfg.BOX_DECAY_INTERVAL:
-        return False
-    if tile.decay_step >= len(cfg.BOX_DECAY_FACTORS) - 1:
+    try:
+        if now - tile.last_decay_at < cfg.BOX_DECAY_INTERVAL:
+            return False
+        if tile.decay_step >= cfg.BOX_DECAY_FACTORS[-1]: 
+            tile.last_decay_at = now
+            return False
+        tile.decay_step += 0.5 # increase decay step to create a smoother fade effect (default 1.0 creates a more abrupt pixelation)
         tile.last_decay_at = now
+        tile.patch_current = pixelate_patch(tile.patch_original, tile.decay_step)
+        return True
+    except Exception as e:
+        print(f"Error in maybe_decay_tile (decay_step={tile.decay_step}): {e}")
         return False
-    tile.decay_step += 1
-    tile.last_decay_at = now
-    factor = cfg.BOX_DECAY_FACTORS[tile.decay_step]
-    tile.patch_current = pixelate_patch(tile.patch_original, factor)
-    return True
 
 
 def composite_fill(fill_size: Tuple[int, int], tiles: List[Tile]) -> Image.Image:
-    canvas = Image.new("RGBA", fill_size, (0, 0, 0, 0))
+    try:
+        canvas = Image.new("RGBA", fill_size, (0, 0, 0, 0))
 
-    for tile in tiles:
-        canvas.alpha_composite(tile.patch_current, (tile.bbox.x1, tile.bbox.y1))
+        for tile in tiles:
+            try:
+                canvas.alpha_composite(tile.patch_current, (tile.bbox.x1, tile.bbox.y1))
+            except Exception as e:
+                print(f"Error compositing tile at ({tile.bbox.x1}, {tile.bbox.y1}): {e}")
 
-    return canvas
+        return canvas
+    except Exception as e:
+        print(f"Error in composite_fill: {e}")
+        return Image.new("RGBA", fill_size, (0, 0, 0, 0))
 
 def fresh_stamp_alpha(stamp: FreshStamp, now: float, cfg: Config) -> float:
     age = now - stamp.created_at
@@ -330,6 +358,8 @@ def main():
     frozen_yolo_ids = set()
     tiles: List[Tile] = []
     boxes = None
+    used_nature_imgs = set()
+    used_generated_imgs = set()
 
     #capture_count is used to determine when to increase the generation interval
     capture_count = 0
@@ -349,10 +379,28 @@ def main():
 
     try:
         while True:
-                ok, frame = cap.read()
-                frame = cv2.flip(frame, 1)   # horizontal mirror
-                if not ok:
-                    time.sleep(0.02)
+                try:
+                    ok, frame = cap.read()
+                    if not ok:
+                        print("Warning: Failed to read frame from camera")
+                        time.sleep(0.1)
+                        continue
+                    frame = cv2.flip(frame, 1)   # horizontal mirror
+                except Exception as e:
+                    print(f"Error reading from camera: {e}")
+                    print("Attempting to reconnect to camera...")
+                    try:
+                        cap.release()
+                        time.sleep(1)
+                        cap = cv2.VideoCapture(0)
+                        if not cap.isOpened():
+                            print("Failed to reconnect to camera, retrying in 2 seconds...")
+                            time.sleep(2)
+                            continue
+                        print("Camera reconnected successfully")
+                    except Exception as reconnect_error:
+                        print(f"Error during camera reconnection: {reconnect_error}")
+                        time.sleep(2)
                     continue
 
                 now = time.time()
@@ -368,29 +416,34 @@ def main():
                     tiles.clear()
                     fresh_stamps.clear()
                     frozen_yolo_ids.clear()
+                    used_nature_imgs.clear()
+                    used_generated_imgs.clear()
 
                 detections = []
 
                 if frame_idx % cfg.DETECT_EVERY == 0:
-                    if cfg.DETECT_SCALE != 1.0:
-                        small = cv2.resize(frame, (0, 0), fx=cfg.DETECT_SCALE, fy=cfg.DETECT_SCALE)
-                    else:
-                        small = frame
+                    try:
+                        if cfg.DETECT_SCALE != 1.0:
+                            small = cv2.resize(frame, (0, 0), fx=cfg.DETECT_SCALE, fy=cfg.DETECT_SCALE)
+                        else:
+                            small = frame
 
-                    results = model.track(
-                        source=small,
-                        persist=True,
-                        tracker="bytetrack.yaml",
-                        classes=[0],
-                        conf=cfg.MODEL_CONF,
-                        iou=cfg.MODEL_IOU,
-                        verbose=False,
-                        device=device
-                    )
-
-                    r = results[0]
-                    boxes = r.boxes
-                    print("detections this pass:", 0 if boxes is None else len(boxes))
+                        results = model.track(
+                            source=small,
+                            persist=True,
+                            tracker="bytetrack.yaml",
+                            classes=[0],
+                            conf=cfg.MODEL_CONF,
+                            iou=cfg.MODEL_IOU,
+                            verbose=False,
+                            device=device
+                        )
+                        r = results[0]
+                        boxes = r.boxes
+                        print("detections this pass:", 0 if boxes is None else len(boxes))
+                    except Exception as e:
+                        print(f"Warning: YOLO detection failed (possible system overload): {e}")
+                        boxes = None
 
                     if boxes is not None and len(boxes) > 0:
                         xyxy = boxes.xyxy.cpu().numpy()
@@ -485,7 +538,7 @@ def main():
                         frozen_keys.add(k)
                         stamp_frozen_outline(acc_lines, qb, cfg)
 
-                        patch = make_patch_for_box(qb, nature_imgs, cfg.BOX_ALPHA, "box")
+                        patch = make_patch_for_box(qb, nature_imgs, cfg.BOX_ALPHA, "box", used_nature_imgs)
                         fresh_patch = patch.copy()
                         fresh_patch.putalpha(cfg.FRESH_STAMP_ALPHA)
                         tile = Tile(
@@ -510,7 +563,7 @@ def main():
                         if generated_imgs and capture_count >= next_gen_capture:
                             rng = random.Random(capture_count)
 
-                            gen_patch = random_nature_patch(generated_imgs, qb.w, qb.h, rng)
+                            gen_patch = random_nature_patch(generated_imgs, qb.w, qb.h, rng, used_generated_imgs)
                             gen_patch.putalpha(cfg.BOX_ALPHA)
                             fresh_patch = gen_patch.copy()
                             fresh_patch.putalpha(cfg.FRESH_STAMP_ALPHA)
@@ -550,37 +603,53 @@ def main():
 
                 fresh_layer = composite_fresh_stamps((W, H), fresh_stamps, now, cfg)
 
-                out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-                out.alpha_composite(acc_fill)
-                out.alpha_composite(acc_lines)
-                out.alpha_composite(fresh_layer)
-                out.alpha_composite(live_layer)
-                
-                display_bgr = pil_rgba_to_bgr(out)
-                display_bgr = cv2.resize(display_bgr, (1920, 1080), interpolation=cv2.INTER_LINEAR)
-                cv2.imshow(WIN, display_bgr)
+                try:
+                    out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+                    out.alpha_composite(acc_fill)
+                    out.alpha_composite(acc_lines)
+                    out.alpha_composite(fresh_layer)
+                    out.alpha_composite(live_layer)
+                    
+                    display_bgr = pil_rgba_to_bgr(out)
+                    display_bgr = cv2.resize(display_bgr, (1920, 1080), interpolation=cv2.INTER_LINEAR)
+                    cv2.imshow(WIN, display_bgr)
+                except Exception as e:
+                    print(f"Warning: Display update failed (possible system overload): {e}")
                 # print("actual capture:",
                 # int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
                 # int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
 
                 if (now - last_save_at) >= cfg.SAVE_INTERVAL:
-                    last_save_at = now
-                    tmp = latest_path.with_suffix(".tmp.png")
-                    out.save(tmp)
-                    os.replace(tmp, latest_path)
-                    if cfg.SAVE_NUMBERED_FRAMES:
-                        frame_path = output_dir / f"ACMI_{saved_idx:06d}.png"
-                        out.save(frame_path)
-                        saved_idx += 1
+                    try:
+                        last_save_at = now
+                        tmp = latest_path.with_suffix(".tmp.png")
+                        out.save(tmp)
+                        os.replace(tmp, latest_path)
+                        if cfg.SAVE_NUMBERED_FRAMES:
+                            frame_path = output_dir / f"ACMI_{saved_idx:06d}.png"
+                            out.save(frame_path)
+                            saved_idx += 1
+                    except Exception as e:
+                        print(f"Warning: Save failed (possible disk full or permission issue): {e}")
 
                 frame_idx += 1
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord("q") or key == 27:
-                    break
+                try:
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord("q") or key == 27:
+                        break
+                except Exception as e:
+                    print(f"Warning: Input handling error: {e}")
+    except Exception as e:
+        print(f"Critical error in main loop (system overload?): {e}")
+        import traceback
+        traceback.print_exc()
     finally:
-        print(f"Final stamp count: {len(tiles)}")
-        cap.release()
-        cv2.destroyAllWindows()
+        try:
+            print(f"Final stamp count: {len(tiles)}")
+            cap.release()
+            cv2.destroyAllWindows()
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
 
 
 if __name__ == "__main__":
