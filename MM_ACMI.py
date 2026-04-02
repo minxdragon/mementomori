@@ -5,6 +5,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
+from ultralytics import YOLO
 
 import cv2
 import numpy as np
@@ -39,6 +40,7 @@ class Track:
     created_at: float
     last_seen_at: float
     frozen: bool = False
+    yolo_id: Optional[int] = None
 
 
 @dataclass
@@ -77,26 +79,27 @@ class Config:
     BOX_DECAY_INTERVAL: float = 5.0
     BOX_DECAY_FACTORS: Tuple[int, ...] = (1, 2, 4, 8, 12, 16)
     
-    TILE_FADE_START: float = 0.5
+    TILE_FADE_START: float = 4.0
     TILE_FADE_DURATION: float = 4.0
     TILE_MIN_ALPHA: float = 0.04
 
-    FRESH_STAMP_DURATION: float = 4.0
+    FRESH_STAMP_DURATION: float = 8.0
     FRESH_STAMP_ALPHA: int = 255
 
     SAVE_INTERVAL: float = 1.5
     SAVE_NUMBERED_FRAMES: bool = True
 
-    MODEL_NAME: str = "yolov5n"
+    MODEL_NAME: str = "yolov8n"
     MODEL_CONF: float = 0.35
     MODEL_IOU: float = 0.40
-    MODEL_MAX_DET: int = 6 #increase to allow more
+    MODEL_MAX_DET: int = 3 #increase to allow more people tracking, but beware of performance impact
 
     GENERATED_DIR: str = "generated"
 
-    GEN_START_INTERVAL: int = 12     # initial X
-    GEN_INTERVAL_GROWTH: int = 6     # increase X by this amount
-    GEN_INTERVAL_STEP: int = 10      # every Y captures increase interval default
+    GEN_START_INTERVAL: int = 12      # start rarer
+    GEN_INTERVAL_SHRINK: int = 2      # reduce interval by this amount
+    GEN_INTERVAL_STEP: int = 10       # every Y captures shrink interval
+    GEN_MIN_INTERVAL: int = 2         # never go below this
 
 
 def clamp_box(b: Box, W: int, H: int) -> Box:
@@ -291,6 +294,7 @@ def composite_fresh_stamps(
 
     return layer
 
+stamped_ids = set()
 def main():
     cfg = Config()
 
@@ -308,13 +312,13 @@ def main():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         raise RuntimeError("Could not open webcam")
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-    model = torch.hub.load("ultralytics/yolov5", cfg.MODEL_NAME)
-    model.to(device)
-    model.eval()
-    model.conf = cfg.MODEL_CONF
-    model.iou = cfg.MODEL_IOU
-    model.max_det = cfg.MODEL_MAX_DET
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    model = YOLO("yolov8n.pt")
+    # model.to(device)
+    # model.eval()
+    # model.conf = cfg.MODEL_CONF
+    # model.iou = cfg.MODEL_IOU
+    # model.max_det = cfg.MODEL_MAX_DET
 
     acc_lines = None
     acc_fill = None
@@ -323,7 +327,9 @@ def main():
     next_id = 1
 
     frozen_keys = set()
+    frozen_yolo_ids = set()
     tiles: List[Tile] = []
+    boxes = None
 
     #capture_count is used to determine when to increase the generation interval
     capture_count = 0
@@ -361,44 +367,96 @@ def main():
                     frozen_keys.clear()
                     tiles.clear()
                     fresh_stamps.clear()
+                    frozen_yolo_ids.clear()
 
                 detections = []
+
                 if frame_idx % cfg.DETECT_EVERY == 0:
                     if cfg.DETECT_SCALE != 1.0:
                         small = cv2.resize(frame, (0, 0), fx=cfg.DETECT_SCALE, fy=cfg.DETECT_SCALE)
-                        results = model(small)
-                        persons = results.xyxy[0].cpu().numpy()
-                        if len(persons) > 0:
-                            persons[:, 0:4] /= cfg.DETECT_SCALE
                     else:
-                        results = model(frame)
-                        persons = results.xyxy[0].cpu().numpy()
-                    detections = boxes_from_yolo_xyxy(persons, W, H, cfg.CONF)
+                        small = frame
+
+                    results = model.track(
+                        source=small,
+                        persist=True,
+                        tracker="bytetrack.yaml",
+                        classes=[0],
+                        conf=cfg.MODEL_CONF,
+                        iou=cfg.MODEL_IOU,
+                        verbose=False,
+                        device=device
+                    )
+
+                    r = results[0]
+                    boxes = r.boxes
+                    print("detections this pass:", 0 if boxes is None else len(boxes))
+
+                    if boxes is not None and len(boxes) > 0:
+                        xyxy = boxes.xyxy.cpu().numpy()
+                        cls = boxes.cls.cpu().numpy()
+
+                        if boxes.id is not None:
+                            ids = boxes.id.cpu().numpy().astype(int)
+                        else:
+                            ids = np.full(len(xyxy), -1, dtype=int)
+
+                        for box, c, det_yolo_id in zip(xyxy, cls, ids):
+                            if int(c) != 0:
+                                continue
+
+                            x1, y1, x2, y2 = box
+                            if cfg.DETECT_SCALE != 1.0:
+                                x1 /= cfg.DETECT_SCALE
+                                y1 /= cfg.DETECT_SCALE
+                                x2 /= cfg.DETECT_SCALE
+                                y2 /= cfg.DETECT_SCALE
+
+                            b = clamp_box(Box(int(x1), int(y1), int(x2), int(y2)), W, H)
+                            if b.area <= 0:
+                                continue
+
+                            detections.append((b, None if det_yolo_id == -1 else int(det_yolo_id)))
 
                 unmatched = set(range(len(detections)))
                 live_idx = [i for i, t in enumerate(tracks) if not t.frozen]
                 used = set()
 
-                for di, det in enumerate(detections):
+                for di, (det, det_yolo_id) in enumerate(detections):
                     best_i = -1
-                    best_s = 0.0
-                    for ti in live_idx:
-                        if ti in used:
-                            continue
-                        s = iou(det, tracks[ti].bbox)
-                        if s > best_s:
-                            best_s = s
-                            best_i = ti
-                    if best_i >= 0 and best_s >= cfg.IOU_THRESH:
+
+                    # first try exact YOLO ID match
+                    if det_yolo_id is not None:
+                        for ti in live_idx:
+                            if ti in used:
+                                continue
+                            if tracks[ti].yolo_id == det_yolo_id:
+                                best_i = ti
+                                break
+
+                    # fallback to IoU only if no ID match
+                    if best_i == -1:
+                        best_s = 0.0
+                        for ti in live_idx:
+                            if ti in used:
+                                continue
+                            s = iou(det, tracks[ti].bbox)
+                            if s > best_s:
+                                best_s = s
+                                best_i = ti if s >= cfg.IOU_THRESH else -1
+
+                    if best_i >= 0:
                         t = tracks[best_i]
                         tracks[best_i].bbox = lerp_box(t.bbox, det, cfg.SMOOTH_T)
                         tracks[best_i].last_seen_at = now
+                        if det_yolo_id is not None:
+                            tracks[best_i].yolo_id = det_yolo_id
                         used.add(best_i)
                         unmatched.discard(di)
 
                 for di in sorted(unmatched):
-                    det = detections[di]
-                    tracks.append(Track(next_id, det, now, now))
+                    det, det_yolo_id = detections[di]
+                    tracks.append(Track(next_id, det, now, now, frozen=False, yolo_id=det_yolo_id))
                     next_id += 1
 
                 tracks = [t for t in tracks if t.frozen or (now - t.last_seen_at) <= cfg.MISS_SECONDS]
@@ -409,9 +467,18 @@ def main():
                     if t.frozen:
                         continue
                     if (now - t.created_at) >= cfg.LIVE_SECONDS:
+                        if t.yolo_id is not None and t.yolo_id in frozen_yolo_ids:
+                            t.frozen = True
+                            continue
+
                         t.frozen = True
+
+                        if t.yolo_id is not None:
+                            frozen_yolo_ids.add(t.yolo_id)
+
                         qb = quantize_box(clamp_box(t.bbox, W, H), cfg.Q)
                         k = geom_key(qb)
+
                         if qb.area <= 0 or k in frozen_keys:
                             continue
 
@@ -433,9 +500,12 @@ def main():
                         capture_count += 1
 
                         if capture_count >= next_interval_bump:
-                            gen_interval += cfg.GEN_INTERVAL_GROWTH
+                            gen_interval = max(
+                                cfg.GEN_MIN_INTERVAL,
+                                gen_interval - cfg.GEN_INTERVAL_SHRINK
+                            )
                             next_interval_bump += cfg.GEN_INTERVAL_STEP
-                            print(f"Generation interval increased to {gen_interval}")
+                            print(f"Generation interval decreased to {gen_interval}")
 
                         if generated_imgs and capture_count >= next_gen_capture:
                             rng = random.Random(capture_count)
