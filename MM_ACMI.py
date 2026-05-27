@@ -1,3 +1,4 @@
+import argparse
 import os
 import time
 import random
@@ -12,6 +13,11 @@ import cv2
 import numpy as np
 from PIL import Image
 import torch
+
+try:
+    from screeninfo import get_monitors
+except ImportError:
+    get_monitors = None
 
 
 @dataclass(frozen=True)
@@ -72,7 +78,7 @@ class Config:
 
     PURPLE_BGRA: Tuple[int, int, int, int] = (255, 0, 255, 255)
     GREEN_BGRA: Tuple[int, int, int, int] = (0, 255, 0, 255)
-    LIVE_THICK: int = 4
+    LIVE_THICK: int = 6
     FROZEN_THICK_OUTER: int = 2
     FROZEN_THICK_INNER: int = 2
 
@@ -173,6 +179,22 @@ def load_nature_images(nature_dir: Path) -> List[Image.Image]:
         except Exception:
             pass
     return imgs
+
+
+def find_monitor_by_name(substring: str = "hdmi"):
+    if get_monitors is None:
+        return None
+    try:
+        needle = substring.lower()
+        for m in get_monitors():
+            name = str(getattr(m, "name", "") or "").lower()
+            device = str(getattr(m, "device", "") or "").lower()
+            manufacturer = str(getattr(m, "manufacturer", "") or "").lower()
+            if needle in name or needle in device or needle in manufacturer:
+                return m
+    except Exception as e:
+        print(f"Warning: failed to enumerate monitors: {e}")
+    return None
 
 
 def random_nature_patch(nature_imgs: List[Image.Image], w: int, h: int, rng: random.Random, used_indices: set = None) -> Image.Image:
@@ -357,6 +379,13 @@ def composite_fresh_stamps(
 
 stamped_ids = set()
 def main():
+    parser = argparse.ArgumentParser(description="ACMI video display with optional HDMI monitor support")
+    parser.add_argument("--hdmi", action="store_true", help="Open the window on an HDMI monitor if detected")
+    parser.add_argument("--display-monitor", type=str, default=None, help="Target monitor name substring to use instead of HDMI")
+    parser.add_argument("--window-width", type=int, default=1920, help="Window width for fullscreen/HDMI display")
+    parser.add_argument("--window-height", type=int, default=1080, help="Window height for fullscreen/HDMI display")
+    args = parser.parse_args()
+
     cfg = Config()
 
     base_dir = Path(os.path.expanduser("~/mementomori"))
@@ -371,7 +400,7 @@ def main():
     fresh_stamps: Deque[FreshStamp] = deque()
     frozen_outlines: Deque[Tuple[Box, float]] = deque()
 
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(1)
     if not cap.isOpened():
         raise RuntimeError("Could not open webcam")
     device = "mps" if torch.backends.mps.is_available() else "cpu"
@@ -401,10 +430,29 @@ def main():
     next_gen_capture = gen_interval
 
     WIN = "memento_mori"
-    cv2.namedWindow(WIN, cv2.WND_PROP_FULLSCREEN)
+    cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(WIN, args.window_width, args.window_height)
+
+    target_monitor = None
+    if args.hdmi or args.display_monitor:
+        monitor_name = args.display_monitor or "hdmi"
+        if get_monitors is None:
+            print("Warning: screeninfo is not installed, HDMI monitor detection is unavailable.")
+        else:
+            target_monitor = find_monitor_by_name(monitor_name)
+            if target_monitor is not None:
+                print(f"Found monitor '{getattr(target_monitor, 'name', str(target_monitor))}' at ({target_monitor.x}, {target_monitor.y})")
+                cv2.moveWindow(WIN, target_monitor.x, target_monitor.y)
+            else:
+                if args.hdmi:
+                    print("No HDMI monitor detected; using primary display instead.")
+                else:
+                    print(f"No monitor matching '{monitor_name}' found; using primary display.")
+
+    if target_monitor is None:
+        cv2.moveWindow(WIN, 0, 0)
+
     cv2.setWindowProperty(WIN, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-    cv2.moveWindow(WIN, 0, 0)
-    cv2.resizeWindow(WIN, 1920, 1080)
 
     frame_idx = 0
     saved_idx = 0
