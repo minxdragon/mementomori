@@ -501,7 +501,7 @@ def main():
     fresh_stamps: Deque[FreshStamp] = deque()
     frozen_outlines: Deque[Tuple[Box, float]] = deque()
 
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         raise RuntimeError("Could not open webcam")
     device = "mps" if torch.backends.mps.is_available() else "cpu"
