@@ -24,10 +24,9 @@ Prerequisites:
 To run a simple script locally:
 
 ```bash
-python MM_live.py
+python MM_ACMI.py
 ```
 
-Replace `MM_live.py` with other runners in the repo such as `MM_ACMI.py`, `MM_live_clean.py`, or `MM_live_pixel_decay.py` depending on the visual behavior you want to explore.
 
 ## Dependencies
 
@@ -67,15 +66,6 @@ Run a script that uses object-detection (requires additional model deps):
 pip install torch torchvision ultralytics
 python yoloBoxestoPNG.py
 ```
-
-## Files of Interest
-
-- `Memento.py` / `MementoHF.py` — core experiment scripts
-- `MM_live.py` — live demo / real-time processing
-- `MM_ACMI.py` — installation-specific script (this workspace's active file)
-- `mask.py`, `mask2.py` — masking and compositing helpers
-- `yoloBoxestoPNG.py` and `yolov8n.pt` — optional object-detection utilities (if you want region-based processing)
-
 ## Design & Ethics Notes
 
 This project is intentionally minimal: rather than training or running large generative models, it focuses on small models, frame-based transformations, heuristic visual mappings, and locally run inference. When heavy models are required, they are optional and clearly labeled — the default experience is low-power and reproducible.
@@ -95,3 +85,13 @@ See the full `LICENSE` file for details.
 ## Contact / Presentation
 
 For exhibition or academic contexts, present both the aesthetic output and the ethical rationale: show what was done, what compute was used, and why the low-power approach matters.
+
+## Attribution
+
+This project was created by J. Rosenbaum. For further information please visit their website at [https://jrosenbaum.com.au](https://jrosenbaum.com.au) or contact via email at jr at jrosenbaum.com.au
+
+## Citation
+If you use this code in an academic context, please cite it as follows:
+
+```Rosenbaum J (2026) minxdragon/mementomori, accessed [date]. https://github.com/minxdragon/mementomori
+
