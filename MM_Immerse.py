@@ -1,7 +1,11 @@
+import argparse
 import os
+import re
 import time
 import random
 import hashlib
+import platform
+import subprocess
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +16,11 @@ import cv2
 import numpy as np
 from PIL import Image
 import torch
+
+try:
+    from screeninfo import get_monitors
+except ImportError:
+    get_monitors = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +54,16 @@ class Track:
 
 
 @dataclass
+class MonitorInfo:
+    name: str
+    x: int
+    y: int
+    width: int
+    height: int
+    primary: bool = False
+
+
+@dataclass
 class Tile:
     bbox: Box
     patch_original: Image.Image
@@ -72,7 +91,7 @@ class Config:
 
     PURPLE_BGRA: Tuple[int, int, int, int] = (255, 0, 255, 255)
     GREEN_BGRA: Tuple[int, int, int, int] = (0, 255, 0, 255)
-    LIVE_THICK: int = 4
+    LIVE_THICK: int = 6
     FROZEN_THICK_OUTER: int = 2
     FROZEN_THICK_INNER: int = 2
 
@@ -173,6 +192,107 @@ def load_nature_images(nature_dir: Path) -> List[Image.Image]:
         except Exception:
             pass
     return imgs
+
+
+def screeninfo_monitors() -> List[MonitorInfo]:
+    monitors: List[MonitorInfo] = []
+    if get_monitors is None:
+        return monitors
+
+    try:
+        for m in get_monitors():
+            name = str(getattr(m, "name", "") or "")
+            device = str(getattr(m, "device", "") or "")
+            manufacturer = str(getattr(m, "manufacturer", "") or "")
+            width = getattr(m, "width", None)
+            height = getattr(m, "height", None)
+            x = getattr(m, "x", 0)
+            y = getattr(m, "y", 0)
+            if width is None or height is None:
+                continue
+            label = name or device or manufacturer or f"monitor{len(monitors)}"
+            monitors.append(MonitorInfo(
+                name=label,
+                x=int(x),
+                y=int(y),
+                width=int(width),
+                height=int(height),
+                primary=False,
+            ))
+    except Exception as e:
+        print(f"Warning: failed to enumerate screeninfo monitors: {e}")
+    return monitors
+
+
+def xrandr_monitors() -> List[MonitorInfo]:
+    monitors: List[MonitorInfo] = []
+    if platform.system().lower() != "linux":
+        return monitors
+
+    try:
+        output = subprocess.check_output(["xrandr", "--query"], stderr=subprocess.DEVNULL, text=True)
+    except Exception:
+        return monitors
+
+    for line in output.splitlines():
+        match = re.search(r"^(\S+)\s+connected(?:\s+primary)?\s+(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", line)
+        if not match:
+            continue
+
+        name = match.group(1)
+        width = int(match.group(2))
+        height = int(match.group(3))
+        x = int(match.group(4))
+        y = int(match.group(5))
+        primary = " primary " in line or line.split()[2] == "primary"
+        monitors.append(MonitorInfo(name=name, x=x, y=y, width=width, height=height, primary=primary))
+
+    return monitors
+
+
+def list_monitors() -> List[MonitorInfo]:
+    monitors = screeninfo_monitors()
+    if monitors:
+        print("Detected monitors:")
+        for i, m in enumerate(monitors):
+            print(f"  [{i}] name={m.name!r} pos=({m.x},{m.y}) size=({m.width}x{m.height}) primary={m.primary}")
+        return monitors
+
+    monitors = xrandr_monitors()
+    if monitors:
+        print("Detected monitors (xrandr):")
+        for i, m in enumerate(monitors):
+            print(f"  [{i}] name={m.name!r} pos=({m.x},{m.y}) size=({m.width}x{m.height}) primary={m.primary}")
+        return monitors
+
+    print("Warning: no monitors were detected via screeninfo or xrandr.")
+    return monitors
+
+
+def get_fallback_monitor(monitors: List[MonitorInfo]) -> Optional[MonitorInfo]:
+    if not monitors:
+        return None
+    external = [m for m in monitors if not m.primary]
+    if external:
+        return max(external, key=lambda m: m.width * m.height)
+    return monitors[0]
+
+
+def find_monitor_by_name(substring: str = "hdmi") -> Optional[MonitorInfo]:
+    monitors = list_monitors()
+    if not monitors:
+        return None
+
+    needle = substring.lower().strip()
+    if needle.isdigit():
+        index = int(needle)
+        if 0 <= index < len(monitors):
+            return monitors[index]
+
+    for m in monitors:
+        if needle and needle in m.name.lower():
+            return m
+    return None
 
 
 def random_nature_patch(nature_imgs: List[Image.Image], w: int, h: int, rng: random.Random, used_indices: set = None) -> Image.Image:
@@ -357,6 +477,16 @@ def composite_fresh_stamps(
 
 stamped_ids = set()
 def main():
+    parser = argparse.ArgumentParser(description="ACMI video display with optional HDMI monitor support")
+    parser.add_argument("--hdmi", action="store_true", help="Open the window on an HDMI monitor if detected")
+    parser.add_argument("--display-monitor", type=str, default=None, help="Target monitor name substring or index to use instead of HDMI")
+    parser.add_argument("--window-width", type=int, default=1920, help="Window width for display window")
+    parser.add_argument("--window-height", type=int, default=1080, help="Window height for display window")
+    parser.add_argument("--fit-monitor", action="store_true", help="Resize window to the detected monitor resolution")
+    parser.add_argument("--fullscreen", action="store_true", help="Use fullscreen mode on the detected monitor")
+    parser.add_argument("--force-monitor", action="store_true", help="Force use of the first external monitor when no exact match is found")
+    args = parser.parse_args()
+
     cfg = Config()
 
     base_dir = Path(os.path.expanduser("~/mementomori"))
@@ -401,11 +531,61 @@ def main():
     next_gen_capture = gen_interval
 
     WIN = "memento_mori"
-    cv2.namedWindow(WIN, cv2.WND_PROP_FULLSCREEN)
-    cv2.setWindowProperty(WIN, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-    cv2.moveWindow(WIN, 0, 0)
-    cv2.resizeWindow(WIN, 1920, 1080)
-    
+    cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(WIN, args.window_width, args.window_height)
+    display_bgr = cv2.flip(display_bgr, 1)  # Flip horizontally
+    cv2.imshow(WIN, display_bgr)
+    target_monitor = None
+    move_x = 0
+    move_y = 0
+    fullscreen_requested = False
+    fullscreen_applied = False
+
+    monitors = []
+    if args.hdmi or args.display_monitor or args.force_monitor:
+        monitor_name = args.display_monitor or "hdmi"
+        monitors = list_monitors()
+        target_monitor = find_monitor_by_name(monitor_name)
+        if target_monitor is None and args.force_monitor:
+            target_monitor = get_fallback_monitor(monitors)
+            if target_monitor is not None:
+                print(
+                    f"No exact match for '{monitor_name}', forcing external monitor "
+                    f"{target_monitor.name} at ({target_monitor.x}, {target_monitor.y}) "
+                    f"size=({target_monitor.width}x{target_monitor.height})"
+                )
+        if target_monitor is not None:
+            monitor_width = getattr(target_monitor, "width", args.window_width)
+            monitor_height = getattr(target_monitor, "height", args.window_height)
+            print(
+                f"Found monitor '{getattr(target_monitor, 'name', str(target_monitor))}' "
+                f"at ({target_monitor.x}, {target_monitor.y}) size=({monitor_width}x{monitor_height})"
+            )
+            if args.fit_monitor:
+                args.window_width = monitor_width
+                args.window_height = monitor_height
+            cv2.resizeWindow(WIN, args.window_width, args.window_height)
+            move_x = target_monitor.x + 10
+            move_y = target_monitor.y + 10
+            print(f"Target window coordinates set to ({move_x}, {move_y})")
+            fullscreen_requested = args.fullscreen
+        else:
+            if args.hdmi:
+                print("No HDMI monitor detected; using primary display instead.")
+            else:
+                print(f"No monitor matching '{monitor_name}' found; using primary display.")
+
+    if target_monitor is None:
+        move_x = 0
+        move_y = 0
+        cv2.resizeWindow(WIN, args.window_width, args.window_height)
+
+    cv2.moveWindow(WIN, move_x, move_y)
+
+    if args.fullscreen and target_monitor is None:
+        print("Fullscreen requested but no external monitor was found; applying fullscreen on primary display")
+        fullscreen_requested = True
+
 
     frame_idx = 0
     saved_idx = 0
@@ -657,6 +837,10 @@ def main():
                     display_bgr = pil_rgba_to_bgr(out)
                     display_bgr = cv2.resize(display_bgr, (1920, 1080), interpolation=cv2.INTER_LINEAR)
                     cv2.imshow(WIN, display_bgr)
+                    if fullscreen_requested and not fullscreen_applied:
+                        print("Applying fullscreen after first frame")
+                        cv2.setWindowProperty(WIN, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+                        fullscreen_applied = True
                 except Exception as e:
                     print(f"Warning: Display update failed (possible system overload): {e}")
                 # print("actual capture:",
