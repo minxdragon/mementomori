@@ -58,7 +58,8 @@ This will open a window showing the live camera feed with detected objects highl
 ##Plant Dataset Cropper
 To crop plant images based on leaf density, run:
 
-```bashpython MM_PlantDatasetCrop.py --input_dir path/to/images --output_dir path/to/crops
+```bash
+python MM_PlantDatasetCrop.py --input_dir path/to/images --output_dir path/to/crops
 ``` 
 This script will process images in the specified input directory, detect leaf density, and save cropped versions to the output directory. Adjust the `MIN_CROP_SIZE_RATIO` in the script if you want to enforce a different minimum crop size.
 
@@ -89,5 +90,6 @@ This project was created by J. Rosenbaum. For further information please visit t
 ## Citation
 If you use this code in an academic context, please cite it as follows:
 
+```
 Rosenbaum J (2026) minxdragon/mementomori, accessed //date. https://github.com/minxdragon/mementomori
-
+```
