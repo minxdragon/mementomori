@@ -346,7 +346,6 @@ def process_image(img_path: Path, yolo_model=None):
 
     h, w = img.shape[:2]
     debug = img.copy()
-    mask = leaf_mask(img)
 
     bbox = None
     mode = None
@@ -358,7 +357,6 @@ def process_image(img_path: Path, yolo_model=None):
         if leaf_result[0] is not None:
             bbox = leaf_result[0]
             all_detections = leaf_result[1]
-            x1, y1, x2, y2 = bbox
             mode = "leaf_density"
     
     # Priority 2: Try general plant detection
@@ -370,18 +368,7 @@ def process_image(img_path: Path, yolo_model=None):
             cv2.rectangle(debug, (x1, y1), (x2, y2), (0, 255, 255), 3)
             mode = "yolo_crop"
 
-    # Priority 3: Color-based leaf mask detection
-    if bbox is None:
-        bbox = biggest_blob_bbox(mask, min_area=2000)
-        if bbox is not None:
-            x1, y1, x2, y2 = bbox
-            x1, y1, x2, y2 = expand_bbox(x1, y1, x2, y2, w, h, PADDING)
-            x1, y1, x2, y2 = fit_aspect(x1, y1, x2, y2, w, h, TARGET_W, TARGET_H)
-            crop = img[y1:y2, x1:x2]
-            cv2.rectangle(debug, (x1, y1), (x2, y2), (0, 255, 0), 3)
-            mode = "leaf_mask"
-    
-    # Priority 4: Center fallback
+    # Priority 3: Center fallback
     if bbox is None:
         crop = center_crop(img, TARGET_W, TARGET_H)
         mode = "center_fallback"
@@ -412,15 +399,14 @@ def process_image(img_path: Path, yolo_model=None):
         x1, y1, x2, y2 = bbox
         cv2.rectangle(debug, (x1, y1), (x2, y2), (255, 165, 0), 7)  # Orange: final crop region
 
-    mask_vis = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-    preview = cv2.addWeighted(debug, 0.75, mask_vis, 0.25, 0)
+    preview = debug.copy()
     cv2.putText(preview, mode, (20, 40),
                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
     cv2.putText(preview, f"Detections: {len(all_detections)}", (20, 80),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 1, cv2.LINE_AA)
     
     # Add legend text to debug image
-    cv2.putText(preview, "Legend: Cyan=Leaf detections, Orange=Final crop, Green=Color mask", (20, 120),
+    cv2.putText(preview, "Legend: Cyan=Leaf detections, Orange=Final crop", (20, 120),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (150, 150, 150), 1, cv2.LINE_AA)
 
     cv2.imwrite(str(dbg_path), preview)
