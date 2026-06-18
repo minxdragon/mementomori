@@ -65,8 +65,8 @@ class Config:
     CONF: float = 0.25
     DETECT_EVERY: int = 4
     DETECT_SCALE: float = 0.5
-    SMOOTH_T: float = 0.50 #how much to interpolate bbox movement. increase to make it smoother but more laggy, decrease to make it more responsive but more jittery defaults to 0.40 which is a good balance for 30fps video
-    LIVE_SECONDS: float = 3 #how long to keep a track as "live" before freezing it. increase to make it more forgiving of short occlusions, decrease to make it freeze faster
+    SMOOTH_T: float = 0.40 #how much to interpolate bbox movement. increase to make it smoother but more laggy, decrease to make it more responsive but more jittery defaults to 0.40 which is a good balance for 30fps video
+    LIVE_SECONDS: float = 2.5 #how long to keep a track as "live" before freezing it. increase to make it more forgiving of short occlusions, decrease to make it freeze faster
     MISS_SECONDS: float = 1.4 #how long to keep "live" tracks around without seeing them again before forgetting them. increase to make it more forgiving of missed detections, decrease to make it more responsive to change
     IOU_THRESH: float = 0.12
 
@@ -405,7 +405,6 @@ def main():
     cv2.setWindowProperty(WIN, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
     cv2.moveWindow(WIN, 0, 0)
     cv2.resizeWindow(WIN, 1920, 1080)
-    
 
     frame_idx = 0
     saved_idx = 0
@@ -656,6 +655,7 @@ def main():
                     
                     display_bgr = pil_rgba_to_bgr(out)
                     display_bgr = cv2.resize(display_bgr, (1920, 1080), interpolation=cv2.INTER_LINEAR)
+                    display_bgr = cv2.flip(display_bgr, 1)  # Flip horizontally
                     cv2.imshow(WIN, display_bgr)
                 except Exception as e:
                     print(f"Warning: Display update failed (possible system overload): {e}")
