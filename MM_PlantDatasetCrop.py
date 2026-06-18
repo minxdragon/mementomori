@@ -150,15 +150,15 @@ def detect_leaf_density_bbox(img_bgr, model, grid_size=LEAF_DENSITY_GRID_SIZE, c
     try:
         results = model(img_bgr, conf=conf_thresh, iou=0.45, verbose=False)
     except Exception as exc:
-        return None
+        return None, []
 
     if not results or len(results) == 0:
-        return None
+        return None, []
 
     result = results[0]
     boxes = getattr(result, "boxes", None)
     if boxes is None or len(boxes) == 0:
-        return None
+        return None, []
 
     xyxy = boxes.xyxy.cpu().numpy()
     h, w = img_bgr.shape[:2]
@@ -267,7 +267,7 @@ def detect_leaf_density_bbox(img_bgr, model, grid_size=LEAF_DENSITY_GRID_SIZE, c
             else:
                 crop_y1 = max(0, crop_y2 - new_h)
 
-    return crop_x1, crop_y1, crop_x2, crop_y2
+    return (crop_x1, crop_y1, crop_x2, crop_y2), xyxy
 
 
 def enhance_crop(crop_bgr):
@@ -350,14 +350,15 @@ def process_image(img_path: Path, yolo_model=None):
 
     bbox = None
     mode = None
+    all_detections = []
     
     # Priority 1: Try leaf density detection (for leaf-specific models like yolo11x_leaf)
     if yolo_model is not None:
-        leaf_bbox = detect_leaf_density_bbox(img, yolo_model)
-        if leaf_bbox is not None:
-            bbox = leaf_bbox
+        leaf_result = detect_leaf_density_bbox(img, yolo_model)
+        if leaf_result[0] is not None:
+            bbox = leaf_result[0]
+            all_detections = leaf_result[1]
             x1, y1, x2, y2 = bbox
-            cv2.rectangle(debug, (x1, y1), (x2, y2), (255, 165, 0), 3)  # Orange
             mode = "leaf_density"
     
     # Priority 2: Try general plant detection
@@ -398,10 +399,23 @@ def process_image(img_path: Path, yolo_model=None):
 
     cv2.imwrite(str(out_path), crop)
 
+    # Draw all detected leaf bounding boxes on debug image
+    if len(all_detections) > 0:
+        for det_box in all_detections:
+            x1, y1, x2, y2 = det_box.astype(int)
+            cv2.rectangle(debug, (x1, y1), (x2, y2), (0, 255, 255), 2)  # Cyan for individual detections
+    
+    # Draw final crop region on top (thicker, orange)
+    if bbox is not None:
+        x1, y1, x2, y2 = bbox
+        cv2.rectangle(debug, (x1, y1), (x2, y2), (255, 165, 0), 4)  # Orange for final crop
+
     mask_vis = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
     preview = cv2.addWeighted(debug, 0.75, mask_vis, 0.25, 0)
     cv2.putText(preview, mode, (20, 40),
                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(preview, f"Detections: {len(all_detections)}", (20, 80),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 1, cv2.LINE_AA)
 
     cv2.imwrite(str(dbg_path), preview)
     print(f"Saved: {out_path}")
