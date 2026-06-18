@@ -400,15 +400,17 @@ def process_image(img_path: Path, yolo_model=None):
     cv2.imwrite(str(out_path), crop)
 
     # Draw all detected leaf bounding boxes on debug image
+    # Cyan boxes = individual leaf detections from YOLO model
     if len(all_detections) > 0:
         for det_box in all_detections:
             x1, y1, x2, y2 = det_box.astype(int)
-            cv2.rectangle(debug, (x1, y1), (x2, y2), (0, 255, 255), 2)  # Cyan for individual detections
+            cv2.rectangle(debug, (x1, y1), (x2, y2), (0, 255, 255), 5)  # Cyan: individual detections
     
     # Draw final crop region on top (thicker, orange)
+    # Orange box = the final crop region selected based on leaf density
     if bbox is not None:
         x1, y1, x2, y2 = bbox
-        cv2.rectangle(debug, (x1, y1), (x2, y2), (255, 165, 0), 4)  # Orange for final crop
+        cv2.rectangle(debug, (x1, y1), (x2, y2), (255, 165, 0), 7)  # Orange: final crop region
 
     mask_vis = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
     preview = cv2.addWeighted(debug, 0.75, mask_vis, 0.25, 0)
@@ -416,6 +418,10 @@ def process_image(img_path: Path, yolo_model=None):
                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
     cv2.putText(preview, f"Detections: {len(all_detections)}", (20, 80),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 1, cv2.LINE_AA)
+    
+    # Add legend text to debug image
+    cv2.putText(preview, "Legend: Cyan=Leaf detections, Orange=Final crop, Green=Color mask", (20, 120),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (150, 150, 150), 1, cv2.LINE_AA)
 
     cv2.imwrite(str(dbg_path), preview)
     print(f"Saved: {out_path}")
