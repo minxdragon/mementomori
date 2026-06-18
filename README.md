@@ -55,6 +55,13 @@ python MM_ACMI.py
 ```
 This will open a window showing the live camera feed with detected objects highlighted and transformed according to the script's logic. The script is designed to run on modest hardware, but if you have a compatible GPU and want to use `yolov8n.pt` for detection, make sure to install `torch` and `ultralytics` and adjust the config accordingly.
 
+##Plant Dataset Cropper
+To crop plant images based on leaf density, run:
+
+```bashpython MM_PlantDatasetCrop.py --input_dir path/to/images --output_dir path/to/crops
+``` 
+This script will process images in the specified input directory, detect leaf density, and save cropped versions to the output directory. Adjust the `MIN_CROP_SIZE_RATIO` in the script if you want to enforce a different minimum crop size.
+
 ## Design & Ethics Notes
 
 This project is intentionally minimal: rather than training or running large generative models, it focuses on small models, frame-based transformations, heuristic visual mappings, and locally run inference. When heavy models are required, they are optional and clearly labeled — the default experience is low-power and reproducible.

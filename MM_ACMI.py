@@ -65,7 +65,7 @@ class Config:
     CONF: float = 0.25
     DETECT_EVERY: int = 4
     DETECT_SCALE: float = 0.5
-    SMOOTH_T: float = 0.40 #how much to interpolate bbox movement. increase to make it smoother but more laggy, decrease to make it more responsive but more jittery defaults to 0.40 which is a good balance for 30fps video
+    SMOOTH_T: float = 0.50 #how much to interpolate bbox movement. increase to make it smoother but more laggy, decrease to make it more responsive but more jittery defaults to 0.40 which is a good balance for 30fps video
     LIVE_SECONDS: float = 2.5 #how long to keep a track as "live" before freezing it. increase to make it more forgiving of short occlusions, decrease to make it freeze faster
     MISS_SECONDS: float = 1.4 #how long to keep "live" tracks around without seeing them again before forgetting them. increase to make it more forgiving of missed detections, decrease to make it more responsive to change
     IOU_THRESH: float = 0.12
@@ -371,7 +371,7 @@ def main():
     fresh_stamps: Deque[FreshStamp] = deque()
     frozen_outlines: Deque[Tuple[Box, float]] = deque()
 
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(1)
     if not cap.isOpened():
         raise RuntimeError("Could not open webcam")
     device = "mps" if torch.backends.mps.is_available() else "cpu"
