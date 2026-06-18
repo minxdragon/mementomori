@@ -48,24 +48,13 @@ If you prefer minimal installs, run only `Pillow`, `opencv-python`, and `numpy` 
 
 ## Usage Examples
 
-Run a live CPU-only demo (recommended for galleries):
-
-```bash
-python MM_live.py
-```
-
 Run the ACMI installation script (adjust camera/index and config inside the file):
 
 ```bash
 python MM_ACMI.py
 ```
+This will open a window showing the live camera feed with detected objects highlighted and transformed according to the script's logic. The script is designed to run on modest hardware, but if you have a compatible GPU and want to use `yolov8n.pt` for detection, make sure to install `torch` and `ultralytics` and adjust the config accordingly.
 
-Run a script that uses object-detection (requires additional model deps):
-
-```bash
-pip install torch torchvision ultralytics
-python yoloBoxestoPNG.py
-```
 ## Design & Ethics Notes
 
 This project is intentionally minimal: rather than training or running large generative models, it focuses on small models, frame-based transformations, heuristic visual mappings, and locally run inference. When heavy models are required, they are optional and clearly labeled — the default experience is low-power and reproducible.
@@ -93,5 +82,5 @@ This project was created by J. Rosenbaum. For further information please visit t
 ## Citation
 If you use this code in an academic context, please cite it as follows:
 
-```Rosenbaum J (2026) minxdragon/mementomori, accessed [date]. https://github.com/minxdragon/mementomori
+Rosenbaum J (2026) minxdragon/mementomori, accessed //date. https://github.com/minxdragon/mementomori
 
