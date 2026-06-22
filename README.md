@@ -24,10 +24,9 @@ Prerequisites:
 To run a simple script locally:
 
 ```bash
-python MM_live.py
+python MM_ACMI.py
 ```
 
-Replace `MM_live.py` with other runners in the repo such as `MM_ACMI.py`, `MM_live_clean.py`, or `MM_live_pixel_decay.py` depending on the visual behavior you want to explore.
 
 ## Dependencies
 
@@ -49,32 +48,20 @@ If you prefer minimal installs, run only `Pillow`, `opencv-python`, and `numpy` 
 
 ## Usage Examples
 
-Run a live CPU-only demo (recommended for galleries):
-
-```bash
-python MM_live.py
-```
-
 Run the ACMI installation script (adjust camera/index and config inside the file):
 
 ```bash
 python MM_ACMI.py
 ```
+This will open a window showing the live camera feed with detected objects highlighted and transformed according to the script's logic. The script is designed to run on modest hardware, but if you have a compatible GPU and want to use `yolov8n.pt` for detection, make sure to install `torch` and `ultralytics` and adjust the config accordingly.
 
-Run a script that uses object-detection (requires additional model deps):
+##Plant Dataset Cropper
+To crop plant images based on leaf density, run:
 
 ```bash
-pip install torch torchvision ultralytics
-python yoloBoxestoPNG.py
-```
-
-## Files of Interest
-
-- `Memento.py` / `MementoHF.py` — core experiment scripts
-- `MM_live.py` — live demo / real-time processing
-- `MM_ACMI.py` — installation-specific script (this workspace's active file)
-- `mask.py`, `mask2.py` — masking and compositing helpers
-- `yoloBoxestoPNG.py` and `yolov8n.pt` — optional object-detection utilities (if you want region-based processing)
+python MM_PlantDatasetCrop.py --input_dir path/to/images --output_dir path/to/crops
+``` 
+This script will process images in the specified input directory, detect leaf density, and save cropped versions to the output directory. Adjust the `MIN_CROP_SIZE_RATIO` in the script if you want to enforce a different minimum crop size.
 
 ## Design & Ethics Notes
 
@@ -95,3 +82,14 @@ See the full `LICENSE` file for details.
 ## Contact / Presentation
 
 For exhibition or academic contexts, present both the aesthetic output and the ethical rationale: show what was done, what compute was used, and why the low-power approach matters.
+
+## Attribution
+
+This project was created by J. Rosenbaum. For further information please visit their website at [https://jrosenbaum.com.au](https://jrosenbaum.com.au) or contact via email at jr at jrosenbaum.com.au
+
+## Citation
+If you use this code in an academic context, please cite it as follows:
+
+```
+Rosenbaum J (2026) minxdragon/mementomori, accessed //date. https://github.com/minxdragon/mementomori
+```
