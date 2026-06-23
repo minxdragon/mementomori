@@ -19,6 +19,7 @@ YOLO_CONF = 0.15
 LEAF_DENSITY_GRID_SIZE = 8
 LEAF_DENSITY_PADDING = 0.1
 MIN_CROP_SIZE_RATIO = 0.4  # Minimum 40% of smallest image dimension
+MAX_LEAF_REGIONS = 3
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"}
 
@@ -145,8 +146,10 @@ def detect_main_plant_bbox(img_bgr, model, target_class=None, conf_thresh=YOLO_C
     return x1, y1, x2, y2
 
 
-def detect_leaf_density_bbox(img_bgr, model, grid_size=LEAF_DENSITY_GRID_SIZE, conf_thresh=YOLO_CONF):
-    """Detect the region with highest leaf concentration and return its bounding box."""
+def detect_leaf_density_bbox(img_bgr, model, grid_size=LEAF_DENSITY_GRID_SIZE, conf_thresh=YOLO_CONF, max_regions=3):
+    """Detect up to `max_regions` regions with high leaf concentration and return their bounding boxes.
+    Returns (list_of_bboxes, all_detection_boxes)
+    """
     try:
         results = model(img_bgr, conf=conf_thresh, iou=0.45, verbose=False)
     except Exception as exc:
@@ -169,6 +172,7 @@ def detect_leaf_density_bbox(img_bgr, model, grid_size=LEAF_DENSITY_GRID_SIZE, c
     density_grid = np.zeros((grid_size, grid_size))
 
     # Count detections in each grid cell
+    centers = []
     for box in xyxy:
         x1, y1, x2, y2 = box
         cx = int((x1 + x2) / 2 / grid_w)
@@ -176,98 +180,101 @@ def detect_leaf_density_bbox(img_bgr, model, grid_size=LEAF_DENSITY_GRID_SIZE, c
         cx = min(max(cx, 0), grid_size - 1)
         cy = min(max(cy, 0), grid_size - 1)
         density_grid[cy, cx] += 1
+        centers.append((cx, cy))
 
-    # Find highest density region
-    max_density_idx = np.unravel_index(np.argmax(density_grid), density_grid.shape)
-    max_density_cy, max_density_cx = max_density_idx
-    max_density = density_grid[max_density_cy, max_density_cx]
+    bboxes = []
+    grid_copy = density_grid.copy()
 
-    # Gather boxes in high-density region and nearby cells
-    region_boxes = []
-    
-    # Expand search radius if few detections found
-    if max_density <= 1:
-        search_radius = 3
-    elif max_density <= 3:
-        search_radius = 2
-    else:
-        search_radius = 1
-    
-    for dy in range(-search_radius, search_radius + 1):
-        for dx in range(-search_radius, search_radius + 1):
-            gy = max_density_cy + dy
-            gx = max_density_cx + dx
-            if 0 <= gy < grid_size and 0 <= gx < grid_size:
-                if density_grid[gy, gx] > 0:
-                    for box in xyxy:
-                        x1, y1, x2, y2 = box
-                        cx = int((x1 + x2) / 2 / grid_w)
-                        cy = int((y1 + y2) / 2 / grid_h)
-                        if cx == gx and cy == gy:
-                            region_boxes.append(box)
+    for _ in range(max_regions):
+        idx = np.unravel_index(np.argmax(grid_copy), grid_copy.shape)
+        max_val = grid_copy[idx]
+        if max_val <= 0:
+            break
 
-    if not region_boxes:
-        region_boxes = xyxy
+        gy, gx = idx
 
-    region_boxes = np.array(region_boxes)
-    crop_x1 = int(np.min(region_boxes[:, 0]))
-    crop_y1 = int(np.min(region_boxes[:, 1]))
-    crop_x2 = int(np.max(region_boxes[:, 2]))
-    crop_y2 = int(np.max(region_boxes[:, 3]))
+        # Gather boxes whose centers fall into this cell (or nearby)
+        region_boxes = []
+        for i, (box, (cx, cy)) in enumerate(zip(xyxy, centers)):
+            if abs(cx - gx) <= 1 and abs(cy - gy) <= 1:
+                region_boxes.append(box)
 
-    # Add padding - scale up padding for sparse detections
-    crop_w = crop_x2 - crop_x1
-    crop_h = crop_y2 - crop_y1
-    
-    # Increase padding multiplier if few detections
-    num_detections = len(region_boxes)
-    if num_detections == 1:
-        padding_scale = LEAF_DENSITY_PADDING * 3.0  # Triple padding for single detection
-    elif num_detections <= 3:
-        padding_scale = LEAF_DENSITY_PADDING * 2.0  # Double padding for 2-3 detections
-    else:
-        padding_scale = LEAF_DENSITY_PADDING
-    
-    pad_x = max(int(crop_w * padding_scale), int(w * 0.05))  # Minimum 5% of image width
-    pad_y = max(int(crop_h * padding_scale), int(h * 0.05))  # Minimum 5% of image height
+        if not region_boxes:
+            # fallback: include any boxes that touch the cell bounds
+            for box in xyxy:
+                x1, y1, x2, y2 = box
+                cell_x1 = int(gx * grid_w)
+                cell_y1 = int(gy * grid_h)
+                cell_x2 = int((gx + 1) * grid_w)
+                cell_y2 = int((gy + 1) * grid_h)
+                if not (x2 < cell_x1 or x1 > cell_x2 or y2 < cell_y1 or y1 > cell_y2):
+                    region_boxes.append(box)
 
-    crop_x1 = max(0, crop_x1 - pad_x)
-    crop_y1 = max(0, crop_y1 - pad_y)
-    crop_x2 = min(w, crop_x2 + pad_x)
-    crop_y2 = min(h, crop_y2 + pad_y)
+        region_boxes = np.array(region_boxes) if len(region_boxes) > 0 else np.array(xyxy)
 
-    # Enforce minimum crop size to prevent over-zooming
-    min_size = int(min(h, w) * MIN_CROP_SIZE_RATIO)
-    crop_w_final = crop_x2 - crop_x1
-    crop_h_final = crop_y2 - crop_y1
-    
-    if crop_w_final < min_size or crop_h_final < min_size:
-        # Center the crop region and expand to minimum size
-        cx = (crop_x1 + crop_x2) / 2.0
-        cy = (crop_y1 + crop_y2) / 2.0
-        
-        new_w = max(crop_w_final, min_size)
-        new_h = max(crop_h_final, min_size)
-        
-        crop_x1 = int(max(0, cx - new_w / 2))
-        crop_x2 = int(min(w, cx + new_w / 2))
-        crop_y1 = int(max(0, cy - new_h / 2))
-        crop_y2 = int(min(h, cy + new_h / 2))
-        
-        # Adjust if hit image boundaries
-        if crop_x2 - crop_x1 < new_w:
-            if crop_x1 == 0:
-                crop_x2 = min(w, crop_x1 + new_w)
-            else:
-                crop_x1 = max(0, crop_x2 - new_w)
-        
-        if crop_y2 - crop_y1 < new_h:
-            if crop_y1 == 0:
-                crop_y2 = min(h, crop_y1 + new_h)
-            else:
-                crop_y1 = max(0, crop_y2 - new_h)
+        crop_x1 = int(np.min(region_boxes[:, 0]))
+        crop_y1 = int(np.min(region_boxes[:, 1]))
+        crop_x2 = int(np.max(region_boxes[:, 2]))
+        crop_y2 = int(np.max(region_boxes[:, 3]))
 
-    return (crop_x1, crop_y1, crop_x2, crop_y2), xyxy
+        # Add padding - scale up padding for sparse detections
+        crop_w = crop_x2 - crop_x1
+        crop_h = crop_y2 - crop_y1
+        num_detections = len(region_boxes)
+        if num_detections == 1:
+            padding_scale = LEAF_DENSITY_PADDING * 3.0
+        elif num_detections <= 3:
+            padding_scale = LEAF_DENSITY_PADDING * 2.0
+        else:
+            padding_scale = LEAF_DENSITY_PADDING
+
+        pad_x = max(int(crop_w * padding_scale), int(w * 0.05))
+        pad_y = max(int(crop_h * padding_scale), int(h * 0.05))
+
+        crop_x1 = max(0, crop_x1 - pad_x)
+        crop_y1 = max(0, crop_y1 - pad_y)
+        crop_x2 = min(w, crop_x2 + pad_x)
+        crop_y2 = min(h, crop_y2 + pad_y)
+
+        # Enforce minimum crop size
+        min_size = int(min(h, w) * MIN_CROP_SIZE_RATIO)
+        crop_w_final = crop_x2 - crop_x1
+        crop_h_final = crop_y2 - crop_y1
+        if crop_w_final < min_size or crop_h_final < min_size:
+            cx = (crop_x1 + crop_x2) / 2.0
+            cy = (crop_y1 + crop_y2) / 2.0
+            new_w = max(crop_w_final, min_size)
+            new_h = max(crop_h_final, min_size)
+            crop_x1 = int(max(0, cx - new_w / 2))
+            crop_x2 = int(min(w, cx + new_w / 2))
+            crop_y1 = int(max(0, cy - new_h / 2))
+            crop_y2 = int(min(h, cy + new_h / 2))
+
+            if crop_x2 - crop_x1 < new_w:
+                if crop_x1 == 0:
+                    crop_x2 = min(w, crop_x1 + new_w)
+                else:
+                    crop_x1 = max(0, crop_x2 - new_w)
+            if crop_y2 - crop_y1 < new_h:
+                if crop_y1 == 0:
+                    crop_y2 = min(h, crop_y1 + new_h)
+                else:
+                    crop_y1 = max(0, crop_y2 - new_h)
+
+        bboxes.append((int(crop_x1), int(crop_y1), int(crop_x2), int(crop_y2)))
+
+        # zero out neighborhood to avoid selecting nearby peaks
+        neigh = 2
+        y0 = max(0, gy - neigh)
+        y1c = min(grid_size, gy + neigh + 1)
+        x0 = max(0, gx - neigh)
+        x1c = min(grid_size, gx + neigh + 1)
+        grid_copy[y0:y1c, x0:x1c] = 0
+
+    if not bboxes:
+        return None, xyxy
+
+    return bboxes, xyxy
 
 
 def enhance_crop(crop_bgr):
@@ -350,12 +357,13 @@ def process_image(img_path: Path, yolo_model=None):
     bbox = None
     mode = None
     all_detections = []
+    bboxes_list = None
     
     # Priority 1: Try leaf density detection (for leaf-specific models like yolo11x_leaf)
     if yolo_model is not None:
-        leaf_result = detect_leaf_density_bbox(img, yolo_model)
+        leaf_result = detect_leaf_density_bbox(img, yolo_model, max_regions=MAX_LEAF_REGIONS)
         if leaf_result[0] is not None:
-            bbox = leaf_result[0]
+            bboxes_list = leaf_result[0]
             all_detections = leaf_result[1]
             mode = "leaf_density"
     
@@ -369,22 +377,33 @@ def process_image(img_path: Path, yolo_model=None):
             mode = "yolo_crop"
 
     # Priority 3: Center fallback
-    if bbox is None:
-        crop = center_crop(img, TARGET_W, TARGET_H)
-        mode = "center_fallback"
-    else:
-        x1, y1, x2, y2 = bbox
-        x1, y1, x2, y2 = expand_bbox(x1, y1, x2, y2, w, h, PADDING)
-        x1, y1, x2, y2 = fit_aspect(x1, y1, x2, y2, w, h, TARGET_W, TARGET_H)
-        crop = img[y1:y2, x1:x2]
-
-    crop = enhance_crop(crop)
-    crop = cv2.resize(crop, (TARGET_W, TARGET_H), interpolation=cv2.INTER_AREA)
-
+    crops_saved = []
     ensure_parent(out_path)
     ensure_parent(dbg_path)
 
-    cv2.imwrite(str(out_path), crop)
+    if bboxes_list is None:
+        # no YOLO leaf regions found -> fallback single center crop
+        crop = center_crop(img, TARGET_W, TARGET_H)
+        mode = "center_fallback"
+        crop = enhance_crop(crop)
+        crop = cv2.resize(crop, (TARGET_W, TARGET_H), interpolation=cv2.INTER_AREA)
+        cv2.imwrite(str(out_path), crop)
+        crops_saved.append(out_path)
+    else:
+        # Save one crop per detected region
+        stem = out_path.stem
+        suffix = out_path.suffix
+        parent = out_path.parent
+        for idx, bbox in enumerate(bboxes_list, start=1):
+            x1, y1, x2, y2 = bbox
+            x1, y1, x2, y2 = expand_bbox(x1, y1, x2, y2, w, h, PADDING)
+            x1, y1, x2, y2 = fit_aspect(x1, y1, x2, y2, w, h, TARGET_W, TARGET_H)
+            crop = img[y1:y2, x1:x2]
+            crop = enhance_crop(crop)
+            crop = cv2.resize(crop, (TARGET_W, TARGET_H), interpolation=cv2.INTER_AREA)
+            out_file = parent / f"{stem}_crop{idx}{suffix}"
+            cv2.imwrite(str(out_file), crop)
+            crops_saved.append(out_file)
 
     # Draw all detected leaf bounding boxes on debug image
     # Cyan boxes = individual leaf detections from YOLO model
@@ -393,9 +412,13 @@ def process_image(img_path: Path, yolo_model=None):
             x1, y1, x2, y2 = det_box.astype(int)
             cv2.rectangle(debug, (x1, y1), (x2, y2), (0, 255, 255), 5)  # Cyan: individual detections
     
-    # Draw final crop region on top (thicker, orange)
-    # Orange box = the final crop region selected based on leaf density
-    if bbox is not None:
+    # Draw final crop regions on top (thicker, orange)
+    # Orange boxes = the final crop regions selected based on leaf density
+    if bboxes_list is not None:
+        for idx, fb in enumerate(bboxes_list, start=1):
+            x1, y1, x2, y2 = fb
+            cv2.rectangle(debug, (x1, y1), (x2, y2), (255, 165, 0), 7)  # Orange: final crop region
+    elif bbox is not None:
         x1, y1, x2, y2 = bbox
         cv2.rectangle(debug, (x1, y1), (x2, y2), (255, 165, 0), 7)  # Orange: final crop region
 
@@ -410,7 +433,10 @@ def process_image(img_path: Path, yolo_model=None):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (150, 150, 150), 1, cv2.LINE_AA)
 
     cv2.imwrite(str(dbg_path), preview)
-    print(f"Saved: {out_path}")
+    if len(crops_saved) == 1:
+        print(f"Saved: {crops_saved[0]}")
+    else:
+        print(f"Saved {len(crops_saved)} crops: {', '.join(str(p) for p in crops_saved)}")
 
 def main():
     yolo_model = load_yolo_model()
