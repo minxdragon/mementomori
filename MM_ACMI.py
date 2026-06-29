@@ -72,16 +72,16 @@ class Config:
 
     PURPLE_BGRA: Tuple[int, int, int, int] = (255, 0, 255, 255)
     GREEN_BGRA: Tuple[int, int, int, int] = (0, 255, 0, 255)
-    LIVE_THICK: int = 4
-    FROZEN_THICK_OUTER: int = 2
+    LIVE_THICK: int = 7
+    FROZEN_THICK_OUTER: int = 3
     FROZEN_THICK_INNER: int = 2
 
     BOX_ALPHA: int = 235
     BOX_DECAY_INTERVAL: float = 5.0
     BOX_DECAY_FACTORS: Tuple[int, ...] = (1, 2, 4, 8, 12, 16)
     
-    TILE_FADE_START: float = 6.0 #how long after freezing to start fading tiles, increase to keep them sharper longer, decrease to start fading sooner default 4.0
-    TILE_FADE_DURATION: float = 4.0 #how long the fade lasts. defult 4.0. add to TILE_FADE_START to determine when tiles reach TILE_MIN_ALPHA
+    TILE_FADE_START: float = 8.0 #how long after freezing to start fading tiles, increase to keep them sharper longer, decrease to start fading sooner default 4.0
+    TILE_FADE_DURATION: float = 6.0 #how long the fade lasts. defult 4.0. add to TILE_FADE_START to determine when tiles reach TILE_MIN_ALPHA
     TILE_MIN_ALPHA: float = 0.04
 
     FRESH_STAMP_DURATION: float = 8.0
@@ -100,9 +100,9 @@ class Config:
 
     GENERATED_DIR: str = "generated"
 
-    GEN_START_INTERVAL: int = 30      # start with a new generation every N captures
+    GEN_START_INTERVAL: int = 400      # start with a new generation every N captures
     GEN_INTERVAL_SHRINK: int = 1      # reduce interval by this amount
-    GEN_INTERVAL_STEP: int = 30       # every Y captures shrink interval
+    GEN_INTERVAL_STEP: int = 400       # every Y captures shrink interval
     GEN_MIN_INTERVAL: int = 1         # never go below this
 
 
